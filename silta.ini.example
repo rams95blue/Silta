@@ -1,0 +1,377 @@
+; ===== Core feature toggles =====
+; These three are the original merged modules. Every OTHER feature (notes,
+; sketchbook, calculator, study outlook, contact sheet, report, gauge,
+; watermark, log...) has its own 'enabled' key in its own section below.
+; Bottom-right success-counters overlay.
+[features]
+success_counters = true
+; Save photos taken with the in-game camera to the DCIM folder.
+functional_camera = true
+; Flashlight/camera battery + OS-coin overlay.
+inventory_overlay = true
+
+; ===== Overlay style =====
+; 0 = auto-size by resolution, otherwise a pixel font size.
+[overlay]
+font_size = 0
+; Hex RRGGBB. Normal counter text.
+text_color = FFFFFF
+; Hex RRGGBB. Counter text once a category is fully complete.
+complete_color = 00FF00
+; Hex RRGGBB. Map-name title and inventory labels.
+title_color = 666666
+; Window background opacity: 0.0 (clear) .. 1.0 (opaque).
+background_alpha = 0.30
+; Gap in px between the overlays and the screen edges.
+margin = 10
+; Anchor corner: top-left | top-right | bottom-left | bottom-right
+counters_corner = bottom-right
+inventory_corner = top-left
+; native = squared/bordered HUD style; debug = plain ImGui look.
+theme = native
+; Show a hotkey tip bar at the top when the cursor is out (phone/menu).
+hotkey_tips = true
+; Fade the tip bar out after tip_fade_seconds (off = stays while cursor is out).
+tip_fade = false
+; Seconds the tip bar stays before fading (when tip_fade = true).
+tip_fade_seconds = 8
+; Remember dragged overlay/notes/sketch window positions across game restarts.
+save_layout = true
+; ===== Focus fade (immersion) =====
+; When on, the counters overlay rests nearly transparent and "wakes up" to full
+; visibility for a few seconds whenever a tally changes (a successful photo, a
+; repair...) or the mouse hovers it, then sinks back.
+focus_fade_counters = false
+; Same for the inventory overlay (wakes on battery/coin pickups).
+focus_fade_inventory = false
+; Idle transparency percent while resting (90 = faint ghost, 0 = opaque).
+focus_transparency = 90
+; How long the overlay stays fully visible after an event.
+focus_seconds = 2.5
+; Fade in/out time (seconds) between resting and visible.
+focus_ramp = 0.35
+; Colour palette preset: default | osmo (amber) | ncg (navy) | corruption (red)
+palette = default
+; Title counters with the real location name (e.g. Bergmann Tunnels)
+location_names = true
+
+; ===== Camera photos =====
+; Saved photo resolution. Default 660x480 = the IMAGE-IN Crystal-shot's in-lore
+; 480p. Presets you might want:
+;   660  x 480   Crystal-shot 480p (lore-accurate, default)
+;   1280 x 720   720p
+;   1920 x 1080  1080p
+;   0    x 0     native capture (full engine resolution)
+; photo_height 0 with a width set = height follows the game aspect.
+[camera]
+photo_width = 660
+photo_height = 480
+; When the target aspect differs from the capture: crop (a real camera crops its
+; sensor - centered window, default) or stretch (distorts).
+aspect = crop
+; EXIF camera identity written into every JPEG (the in-lore camera is the
+; IMAGE-IN Crystal-shot). Change to anything you like.
+exif_make = IMAGE-IN
+exif_model = Crystal-shot
+; EXIF Software tag. Empty = "SILTA v<version>" automatically.
+exif_software =
+; jpg (smaller files) or png (lossless).
+format = jpg
+; Scaling filter when resizing: linear (smoother) or point (sharp).
+upscale_filter = linear
+; Photo file names: camera (DSC00001.jpg, digital-camera style) or timestamp.
+naming = camera
+; Show a brief 'IMAGE-IN - DSC#####.jpg' toast when a photo is saved
+save_toast = true
+; Seconds the save toast stays (0 = disable)
+toast_seconds = 0.5
+; Cosmetic text before the photo name in the toast
+toast_label = saved to microSD\DCIM\
+; Stamp a visible N.C.G. survey caption (location, date, surveyor) onto the photo.
+burn_in = true
+; Embed EXIF metadata (make/model, date, location) into JPEG photos.
+exif = true
+; EXIF capture timestamp, format YYYY:MM:DD HH:MM:SS. The date is also the base
+; date used when exif_datetime_auto is on.
+exif_datetime = 2016:08:08 12:00:00
+; Approximate the photo time-of-day from the map's chapter (c1 ~08:00 .. c10
+; ~23:00), plus ~20 min per mission within the chapter. Deliberately NOT tied to
+; real play time, so a slow playthrough still matches the canon one-day timeline.
+; Set false to use the fixed exif_datetime instead.
+exif_datetime_auto = true
+; --- Real coordinates in EXIF ---
+; Coordinates work out of the box (origin offset built in). The keys below are
+; recovery tools for a hypothetical future game patch only.
+; *** DEBUG ONLY *** If a patch ever moves the origin: console (developer 1),
+; getpos, paste the three numbers after 'setpos' below (trailing ;setang is
+; harmless), press F6 and stand still ~1 s - SILTA locks the new offset
+; (toast + log), e.g.
+;   calibrate = 2890.121094 -5455.071289 -3361.273193
+calibrate =
+; *** DEBUG ONLY *** Player-origin source for EXIF coordinates. Leave at 0 =
+; built-in (offset 0x2C - works on the current game build); positive byte
+; offset = override after a game patch (re-run calibrate to find it);
+; -1 = disable coordinates entirely.
+player_origin_offset = 0
+; Map coordinates to EXIF GPS tags. Cosmetic mapping: the world origin anchors
+; where Stolland canonically sits - the open Baltic Sea between Sweden (NE) and
+; Denmark (S), per stalburg.net/Stolland - so viewers drop your survey pins on
+; Stolland's waters.
+exif_gps = true
+gps_lat0 = 57.0
+gps_lon0 = 19.0
+gps_units_per_degree = 100000.0
+; --- Visible burn-in caption styling ---
+; Top line (N.C.G. SURVEY <location>) and bottom line (photo / date / surveyor).
+burn_in_accent_color = FFEB96
+burn_in_text_color = E6E6E6
+; Caption band darkness: 0 = solid black strip, 1 = no strip (text only).
+burn_in_band = 0.35
+; Sort photos into per-site subfolders, e.g. DCIM\HammerValleyReservoir\.
+subfolders = true
+; Append every photo (file, site, time, coords) to DCIM\survey_log.txt.
+survey_log = true
+; Include an N.C.G. asset tag (site + filename) in the EXIF description.
+asset_tag = true
+
+; ===== End-of-game survey report =====
+; On reaching an ending map, write NCG_Survey_Report.txt to the game folder and
+; show a themed in-game popup with the verdict.
+[report]
+enabled = true
+; Comma-separated map-name fragments that count as "the end" (the report fires
+; when the current map name contains any). Edit to match your build's epilogue
+; map - check it in console with 'status' or the top-right HUD.
+ending_maps = infra_c10_m3_reactor,epilogue,outro,ending
+; How long the report popup stays on screen.
+popup_seconds = 12.0
+
+; ===== Per-category counter rows =====
+; *_color: hex RRGGBB for that row.  *_show: false hides that row.
+[counters]
+defects_color = E0E0E0
+defects_show = true
+corruption_color = FF6E6E
+corruption_show = true
+repairs_color = 6ED1FF
+repairs_show = true
+geocaches_color = FFD96E
+geocaches_show = true
+flowmeters_color = B58CFF
+flowmeters_show = true
+; How a finished category is shown: color | check | dim
+complete_style = color
+; Show an overall completion line (Total: cur / max (pct%)).
+show_total = true
+; Use the game's own wording for the rows (Photo spots / Corruption docs / etc.)
+canon_labels = false
+; Brief progress popup (per-category %, next achievement) when the cursor is out
+show_progress = true
+progress_seconds = 5
+
+; ===== Battery overlay colours (hex RRGGBB) + icons =====
+[inventory]
+flashlight_color = FFE08A
+camera_color = 8AD0FF
+oscoins_color = FFD96E
+; Small battery glyph by the flashlight/camera lines.
+battery_icons = true
+; Coin glyph by OS Coins (appears once you have at least 1).
+coin_icon = true
+; Digital battery gauge near the bottom of the screen. Without a charge offset
+; (below) it can only show the battery COUNT, appearing briefly when it changes.
+; With the offset set it tracks the real charge live while the flashlight drains.
+flashlight_gauge = true
+; *** DEBUG ONLY *** LIVE flashlight charge source. Leave at 0 = built-in
+; (offset 0x184C, percent of the current battery - works on the current game
+; build). Positive byte offset = override if a future game patch moves the
+; struct (re-run charge_autoscan to find it); -1 = disable the live gauge
+; (falls back to battery count).
+flashlight_charge_offset = 0
+; Full-gauge value. 0 = auto (1000 with charge offset, 10 for count).
+flashlight_gauge_max = 0
+; *** DEBUG ONLY *** - normally NOT needed (the charge offset is built in).
+; If a game patch ever moves it: turn this on, flashlight ON ~15 s, SILTA finds
+; the new offset (toast + silta.log); put it in flashlight_charge_offset above,
+; turn this back off.
+charge_autoscan = false
+; How long the gauge lingers after the last charge drop. The flashlight drains
+; 1 unit every ~2 s, so values under ~2.5 make the gauge blink between ticks
+; instead of staying up.
+flashlight_gauge_seconds = 3.0
+; Smooth fade-out duration (seconds) at the end of the linger.
+flashlight_gauge_fade = 0.4
+; Show the % text (and the spare-battery count) on the gauge.
+flashlight_gauge_numbers = false
+; Gauge skin: default (instrument panel), subtle (slim transparent bar), or
+; custom (panel layout with the colors below).
+flashlight_gauge_skin = subtle
+; Gauge screen position (top-left corner, pixels). -1 -1 = automatic
+; bottom-center. Easiest: unlock overlays (F11) and drag the gauge with the
+; mouse - the position saves here automatically.
+gauge_x = -1
+gauge_y = -1
+; Custom gauge colors (hex RRGGBB), used when flashlight_gauge_skin = custom.
+gauge_custom_bg = 0C0E12
+gauge_custom_frame = 46546E
+gauge_custom_label = 96AAC8
+gauge_custom_fill_high = 78DC78
+gauge_custom_fill_mid = EBC85A
+gauge_custom_fill_low = EB5A50
+; Comma-separated map-name fragments where the inventory overlay is hidden
+; entirely (maps that never use it - the office prologue has no flashlight or
+; camera). Add more fragments if other maps follow the same logic.
+hidden_maps = infra_c1_m1
+
+; ===== Notes scratchpad =====
+; A resizable/movable window to jot puzzle/secret/ARG notes; text is saved to
+; silta_notes.txt. Toggle with the notes hotkey.
+[notes]
+enabled = true
+text_color = EBEBDC
+; Notes skin: ncg (memo) | pad (yellow pad) | plain | geolog (geocache log) |
+; custom (colors below)
+skin = ncg
+; Custom-skin colors (hex RRGGBB / RRGGBBAA), used when skin = custom.
+; rule/margin with alpha 00 = no ruled lines / no margin line.
+custom_paper = F5F5ED
+custom_ink = 1A1F33
+custom_rule = 7896CC00
+custom_margin = D25A5A00
+; Auto-open the notes window whenever the cursor is out (phone/menu).
+open_with_phone = false
+; Text size multiplier for the notes window (1.0 = default).
+font_scale = 1.0
+
+; ===== Sketchbook (NCG survey sketch sheet) =====
+; A paintable canvas; export saved to sketches\NCG_SURVEY_#####.png.
+[sketch]
+enabled = true
+; Square canvas resolution in pixels (used when width/height are 0).
+size = 1000
+; Rectangular page: set BOTH width and height (0 = use 'size'). The canvas keeps
+; this exact shape in-game - you can only resize/enlarge the window (it letterboxes),
+; never distort the page.
+width = 0
+height = 0
+; Faint survey grid + N.C.G. title block on the page.
+survey_sheet = true
+; Transparent page so you can trace over the in-game scenery.
+transparent = false
+; Canvas display: false = crisp (point), true = smooth (bilinear)
+smooth = true
+; Starting brush size (1-40) and ink colour (hex RRGGBB).
+default_brush = 4
+; Sketchbook colors (hex RRGGBB, or RRGGBBAA where alpha matters): paper (window
+; background), toolbar ink, survey grid (alpha supported), and the N.C.G.
+; letterhead/rule/title block. Grid/letterhead apply on the next Clear.
+paper_color = F7F5EB
+ink_color = 141A29
+grid_color = 6E7D966E
+letterhead_color = 141E4B
+default_ink = 1A1F66
+
+; ===== Survey identity (sketch title block + photo caption) =====
+[survey]
+surveyor = M. SILTANEN
+date = 08.08.2016
+
+; ===== N.C.G. field calculator =====
+; Calculator with scientific, programmer (bases/bitwise) and text/cipher
+; (hex<->ASCII, Caesar) modes, plus structural-analyst helpers. Toggle with the
+; calculator hotkey; switch modes with the buttons along the top.
+[calculator]
+enabled = true
+; Startup mode: basic | scientific | programmer | text
+mode = basic
+; Skin: ncg (default instrument), osmo (Osmo Olut beer theme), or custom
+; (colors below - easiest edited via the calculator's in-game Style tab,
+; which has a 'Save to silta.ini' button).
+skin = ncg
+; Custom-skin colors (hex RRGGBB), used when skin = custom.
+custom_window = 1C1F21
+custom_button = 333840
+custom_button_hover = 4D545E
+custom_button_active = 66571F
+custom_accent = 8C9EBF
+custom_display = FFBD33
+custom_display_bg = 0D0F0D
+
+; ===== N.C.G. study outlook (ending predictor) =====
+; Panel mapping your photo/corruption tallies onto the game's ending thresholds.
+[ending]
+enabled = true
+
+; ===== Photo contact sheet =====
+; Thumbnail grid of this session's photos with a click-to-isolate zoom view.
+[contact_sheet]
+enabled = true
+
+; ===== Hotkeys (Win32 virtual-key codes; 0 = disabled) =====
+; F1=0x70 F6=0x75 F7=0x76 F8=0x77 F9=0x78 F10=0x79 F11=0x7A F12=0x7B. INS toggles all.
+[hotkeys]
+; Reload this ini live (colors/corners/sizes) without restarting.
+reload_config = 117
+; Show/hide the counters overlay.
+toggle_counters = 118
+; Show/hide the battery overlay.
+toggle_inventory = 119
+; Move counters to the next screen corner.
+cycle_counters_corner = 120
+; Move inventory to the next screen corner.
+cycle_inventory_corner = 121
+; Unlock to drag overlays with the mouse; lock snaps them back.
+toggle_lock = 122
+; Snap both overlays back to their configured corners.
+reset_position = 123
+; Show/hide the notes scratchpad.
+toggle_notes = 115
+; Show/hide the NCG sketchbook.
+toggle_sketch = 114
+; Show/hide the field calculator (basic / scientific / programmer / text-cipher).
+toggle_calculator = 113
+; Show/hide the study-outlook (ending predictor) panel.
+toggle_ending = 112
+; Show/hide the photo contact sheet.
+toggle_contact = 116
+; Hotkey tip bar styling (hex RRGGBB). Empty = follow the overlay theme colors
+; (complete_color for keys, text_color for descriptions).
+key_color =
+text_color =
+
+; ===== Engine tweaks (ADVANCED, off by default) =====
+; Runs console commands on each map load via IVEngineClient.
+; engine_interface: blank = auto-try common versions, or set one explicitly.
+; clientcmd_index: IVEngineClient::ClientCmd vtable slot - VERIFY before enabling;
+; a wrong index can crash. Any OTHER key here is a command to run, e.g.:
+;   captions = closecaption 1
+[tweaks]
+enabled = false
+engine_interface =
+clientcmd_index = 7
+
+; ============================================================
+; Hotkeys above use Win32 Virtual-Key codes (decimal).
+; Full list of codes:
+;   https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
+; Keyboard input overview:
+;   https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input
+; Quick reference: F1=112 F2=113 F3=114 F4=115 F5=116 F6=117
+;   F7=118 F8=119 F9=120 F10=121 F11=122 F12=123
+;   INS=45 DEL=46 HOME=36 END=35 PGUP=33 PGDN=34
+;   A-Z=65..90  0-9=48..57  SPACE=32  TAB=9  0=disabled
+; ============================================================
+
+; ===== Logging =====
+; *** DEBUG ONLY *** Verbose silta.log: timestamps every line, flushes
+; immediately (a crash leaves the last action in the log), and adds debug
+; breadcrumbs. Leave off in normal play; turn on when hunting a bug.
+[log]
+verbose = false
+
+; ===== Version watermark =====
+; Small white "SILTA v1.0" tag, shown ONLY in the main menu.
+[watermark]
+enabled = true
+; Corner: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right.
+corner = 3
