@@ -1,4 +1,0 @@
-LIBRARY	"floorb_infra_mod.dll"
-
-EXPORTS
-		CreateInterface @1
