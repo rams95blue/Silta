@@ -440,12 +440,25 @@ static std::mutex g_PendingCmdMx;
 static std::vector<std::string> g_PendingTweakCmds;
 
 void overlay::RunTweakKey(int vk) {
-	if (!g_TweaksEnabled || vk == 0) return;
-	for (const TweakBind& b : g_TweakKeyBinds) {
-		if (b.vk == vk) {
-			std::lock_guard<std::mutex> lk(g_PendingCmdMx);
-			g_PendingTweakCmds.push_back(b.cmd);
+	if (vk == 0) return;
+	bool matched = false;
+	if (g_TweaksEnabled) {
+		for (const TweakBind& b : g_TweakKeyBinds) {
+			if (b.vk == vk) {
+				std::lock_guard<std::mutex> lk(g_PendingCmdMx);
+				g_PendingTweakCmds.push_back(b.cmd);
+				matched = true;
+			}
 		}
+	}
+	// Only trace tweak key-binds when tweaks is actually enabled - otherwise this
+	// fired for every keystroke (e.g. Insert=0x2D, the overlay toggle) and looked
+	// like tweaks was doing something when it wasn't.
+	if (g_LogVerbose && g_TweaksEnabled) {
+		char line[96];
+		sprintf_s(line, sizeof(line), "tweaks: keydown 0x%02X (%s)", vk,
+			matched ? "matched -> queued" : "no bind for this key");
+		LogV(line);
 	}
 }
 
@@ -457,7 +470,10 @@ static void DrainTweakKeyCommands() {
 		pending.swap(g_PendingTweakCmds);
 	}
 	void* ec = ResolveEngineClient();
-	if (ec == nullptr) return;
+	if (ec == nullptr) {
+		LogE("tweaks: engine client unresolved - bind command(s) dropped (check engine_interface / clientcmd_index)");
+		return;
+	}
 	for (const std::string& cmd : pending) {
 		EngineClientCmd(ec, g_TweakClientCmdIndex, cmd.c_str());
 		g_LogWriter << "tweaks: key-bind ran '" << cmd << "'" << std::endl;
@@ -568,6 +584,12 @@ static void load_config() {
 			"; How long the overlay stays fully visible after an event.");
 		config.SetDoubleValue("overlay", "focus_ramp", 0.35,
 			"; Fade in/out time (seconds) between resting and visible.");
+		config.SetBoolValue("overlay", "force_backbuffer_render", false,
+			"; *** EXPERIMENTAL *** Render the overlay onto the real back buffer\n"
+			"; instead of the currently-bound target. Fixes the overlay vanishing\n"
+			"; when Source post-processing is off (mat_postprocess_enable 0). Leave\n"
+			"; false unless you hit that; enable if the overlay disappears with\n"
+			"; certain graphics settings.");
 		config.SetBoolValue("overlay", "save_layout", true,
 			"; Remember dragged overlay/notes/sketch window positions across game restarts.");
 		config.SetValue("overlay", "palette", "default",
@@ -799,19 +821,21 @@ static void load_config() {
 			"; ===== Photo contact sheet =====\n; Thumbnail grid of this session's photos with a click-to-isolate zoom view.");
 
 		config.SetBoolValue("log", "verbose", false,
-			"; ===== Logging =====\n; *** DEBUG ONLY *** Verbose silta.log: timestamps every line, flushes\n; immediately (so a crash leaves the last action in the log), and adds debug\n; breadcrumbs. Leave off in normal play; turn on when hunting a bug.");
+			"; ===== Logging =====\n; Verbose silta.log: timestamps every line, flushes immediately (so a crash\n; leaves the last action in the log), and adds debug breadcrumbs. Turn on when\n; hunting a bug or filing a report.");
 
 		config.SetBoolValue("watermark", "enabled", true,
 			"; ===== Version watermark =====\n; Small white 'SILTA v1.0' tag, shown ONLY in the main menu.");
 		config.SetLongValue("watermark", "corner", 3,
 			"; Corner: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right.");
+		config.SetValue("watermark", "text", "",
+			"; Main-menu watermark text. Empty = \"SILTA v<version>\" automatically.\n"
+			"; Set to any string to override it.");
 
 		config.SetBoolValue("report", "enabled", true,
 			"; ===== End-of-game survey report =====\n; On reaching an ending map, write NCG_Survey_Report.txt to the game folder\n; and show a themed in-game popup with the verdict.");
-		config.SetValue("report", "ending_maps", "infra_c10_m3_reactor,epilogue,outro,ending",
-			"; Comma-separated map-name fragments that count as 'the end'. The report\n"
-			"; fires when the current map name contains any of these. Edit to match your\n"
-			"; build's epilogue map (check it in console with 'status' or the top-right HUD).");
+		config.SetValue("report", "ending_maps", "infra_c11_ending_1,infra_c11_ending_2,infra_c11_ending_3",
+			"; Comma-separated map-name fragments that count as 'the end'; the report\n"
+			"; fires when the current map name contains any of them.");
 		config.SetDoubleValue("report", "popup_seconds", 12.0,
 			"; How long the report popup stays on screen.");
 		config.SetValue("report", "debug_trigger", "",
@@ -969,6 +993,23 @@ static void load_config() {
 	overlay::hotkeys.toggleEnding = ParseKeyValue(config.GetValue("hotkeys", "toggle_ending", ""), overlay::hotkeys.toggleEnding);
 	overlay::hotkeys.toggleContact = ParseKeyValue(config.GetValue("hotkeys", "toggle_contact", ""), overlay::hotkeys.toggleContact);
 
+	// Verbose diagnostic: dump the resolved hotkey codes so a "binds don't work"
+	// report can be checked against what actually parsed. Toggle-menu (Insert by
+	// default) hides ALL overlays, a common cause of "hotkeys stopped working".
+	if (g_LogVerbose) {
+		char hb[512];
+		sprintf_s(hb, sizeof(hb),
+			"hotkeys resolved: toggle_menu(show/hide all)=0x%02X reload=0x%02X counters=0x%02X "
+			"inventory=0x%02X notes=0x%02X sketch=0x%02X calc=0x%02X ending=0x%02X contact=0x%02X "
+			"lock=0x%02X reset=0x%02X cornerC=0x%02X cornerI=0x%02X",
+			Base::Data::Keys::ToggleMenu, overlay::hotkeys.reloadConfig, overlay::hotkeys.toggleCounters,
+			overlay::hotkeys.toggleInventory, overlay::hotkeys.toggleNotes, overlay::hotkeys.toggleSketch,
+			overlay::hotkeys.toggleCalculator, overlay::hotkeys.toggleEnding, overlay::hotkeys.toggleContact,
+			overlay::hotkeys.toggleLock, overlay::hotkeys.resetPosition,
+			overlay::hotkeys.cycleCountersCorner, overlay::hotkeys.cycleInventoryCorner);
+		LogV(hb);
+	}
+
 	// ----- Tweaks (console commands) -----
 	g_TweaksEnabled = config.GetBoolValue("tweaks", "enabled", false);
 	g_TweakEngineInterface = config.GetValue("tweaks", "engine_interface", "");
@@ -994,11 +1035,35 @@ static void load_config() {
 		char kk[16], ck[16];
 		sprintf_s(kk, sizeof(kk), "bind%d_key", i);
 		sprintf_s(ck, sizeof(ck), "bind%d_cmd", i);
-		const int vk = ParseKeyValue(config.GetValue("tweaks", kk, ""), 0);
+		const std::string rawKey = config.GetValue("tweaks", kk, "");
+		const int vk = ParseKeyValue(rawKey, 0);
 		const char* cmd = config.GetValue("tweaks", ck, "");
-		if (vk != 0 && cmd != nullptr && *cmd != '\0') {
+		const bool hasCmd = (cmd != nullptr && *cmd != '\0');
+		if (vk != 0 && hasCmd) {
 			g_TweakKeyBinds.push_back({ vk, cmd });
+		} else if (!rawKey.empty() || hasCmd) {
+			// Half-configured bind (key without command or vice-versa) - flag it.
+			char w[192];
+			sprintf_s(w, sizeof(w), "tweaks: bind%d ignored (key='%s' cmd='%s') - both are required",
+				i, rawKey.c_str(), hasCmd ? cmd : "");
+			LogI(w);
 		}
+	}
+	// Diagnostics: make bind setup visible in silta.log. "Binds don't work" is
+	// almost always enabled=false or a mistyped key; this makes which one obvious.
+	if (!g_TweakKeyBinds.empty()) {
+		for (const TweakBind& b : g_TweakKeyBinds) {
+			char line[160];
+			sprintf_s(line, sizeof(line), "tweaks: bind key=0x%02X -> '%s'", b.vk, b.cmd.c_str());
+			LogI(line);
+		}
+		if (!g_TweaksEnabled) {
+			LogI("tweaks: bind(s) configured but [tweaks] enabled=false - binds are INACTIVE (set enabled = true)");
+		} else {
+			LogI("tweaks: binds active; press a bound key and watch for \"key-bind ran\" (enable [log] verbose for keydown traces)");
+		}
+	} else if (g_TweaksEnabled) {
+		LogI("tweaks: enabled, but no valid key-binds parsed - check bindN_key / bindN_cmd");
 	}
 
 	// ----- Inventory (battery) colours -----
@@ -1076,6 +1141,8 @@ static void load_config() {
 	overlay::tipFade = config.GetBoolValue("overlay", "tip_fade", false);
 	overlay::tipFadeSeconds = static_cast<float>(config.GetDoubleValue("overlay", "tip_fade_seconds", 8.0));
 	overlay::saveLayout = config.GetBoolValue("overlay", "save_layout", true);
+	overlay::forceBackbuffer = config.GetBoolValue("overlay", "force_backbuffer_render", false);
+	overlay::watermarkText = config.GetValue("watermark", "text", "");
 	overlay::countersFocusFade = config.GetBoolValue("overlay", "focus_fade_counters", false);
 	overlay::invFocusFade = config.GetBoolValue("overlay", "focus_fade_inventory", false);
 	overlay::focusTransparency = static_cast<int>(config.GetLongValue("overlay", "focus_transparency", 90));
@@ -1134,7 +1201,7 @@ static void load_config() {
 	overlay::debugReportKey = ParseKeyValue(config.GetValue("report", "debug_trigger", ""), 0);
 	{
 		g_ReportTokens.clear();
-		std::string list = config.GetValue("report", "ending_maps", "infra_c10_m3_reactor,epilogue,outro,ending");
+		std::string list = config.GetValue("report", "ending_maps", "infra_c11_ending_1,infra_c11_ending_2,infra_c11_ending_3");
 		size_t start = 0;
 		while (start <= list.size()) {
 			size_t comma = list.find(',', start);

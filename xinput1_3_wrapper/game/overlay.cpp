@@ -13,6 +13,7 @@
 #include "brad.h" // quack
 
 void LogI(const std::string&); // silta.log (defined in infra.cpp)
+void LogV(const std::string&); // silta.log verbose (defined in infra.cpp)
 #include "inventory.h"
 #include "counters.h"
 #include "functional_camera.h"
@@ -118,6 +119,8 @@ bool   overlay::contactEnabled = true;
 bool   overlay::contactShown = false;
 bool   overlay::watermark = true;
 int    overlay::watermarkCorner = 3; // bottom-right
+std::string overlay::watermarkText = "";
+bool   overlay::forceBackbuffer = false;
 bool   overlay::inMenu = true;
 bool   overlay::sketchEnabled = true;
 bool   overlay::sketchShown = false;
@@ -1129,8 +1132,12 @@ static void RenderWatermark() {
 	if (!overlay::watermark || !overlay::inMenu) return;
 	const int cw = Base::Data::HACK_clientRect.right - Base::Data::HACK_clientRect.left;
 	const int chh = Base::Data::HACK_clientRect.bottom - Base::Data::HACK_clientRect.top;
-	char tag[64];
-	sprintf_s(tag, sizeof(tag), "%s v%s", overlay::kModName, overlay::kVersion);
+	char tag[128];
+	if (!overlay::watermarkText.empty()) {
+		strncpy_s(tag, sizeof(tag), overlay::watermarkText.c_str(), _TRUNCATE);
+	} else {
+		sprintf_s(tag, sizeof(tag), "%s v%s", overlay::kModName, overlay::kVersion);
+	}
 	const ImVec2 sz = ImGui::CalcTextSize(tag);
 	const float pad = 8.0f;
 	ImVec2 p;
@@ -2281,8 +2288,23 @@ void overlay::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 		const int vk = static_cast<int>(wParam);
 		const overlay::Hotkeys& hk = overlay::hotkeys;
 
+		// Verbose: record every key-down the overlay actually receives, with the
+		// scancode and extended-key flag so the *physical* key is identifiable.
+		// Several physical keys share one virtual-key code - notably Numpad 0 with
+		// NumLock OFF sends VK_INSERT (0x2D), same as the dedicated Insert key
+		// (ext=1 = dedicated Insert/nav cluster, ext=0 = numpad with NumLock off).
+		{
+			const int sc = (lParam >> 16) & 0xFF;
+			const int ext = (lParam >> 24) & 0x1;
+			char kb[80];
+			sprintf_s(kb, sizeof(kb), "hotkey: keydown vk=0x%02X scancode=0x%02X ext=%d", vk, sc, ext);
+			LogV(kb);
+		}
+
 		if (vk == Base::Data::Keys::ToggleMenu) {
 			overlay::shown = !overlay::shown;
+			LogV(overlay::shown ? "hotkey: overlays SHOWN (toggle-menu)"
+				: "hotkey: overlays HIDDEN (toggle-menu / Insert) - this hides ALL overlays");
 		}
 		else if (hk.reloadConfig && vk == hk.reloadConfig) {
 			overlay::reloadRequested = true; // serviced on the render thread
@@ -2339,6 +2361,31 @@ void overlay::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
 	ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam);
 }
+// Draw the ImGui frame. Default: draw onto whatever render target is bound
+// (the historical behaviour). *** EXPERIMENTAL *** force_backbuffer: bind the
+// real back buffer first, so the overlay survives render-target changes from
+// Source's post-processing pipeline (mat_postprocess_enable 0 otherwise leaves
+// a non-backbuffer target bound and the overlay vanishes). Restores the prior
+// target and releases both surfaces afterwards.
+static void PresentImGui(LPDIRECT3DDEVICE9 dev) {
+	if (!overlay::forceBackbuffer || dev == nullptr) {
+		ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+		return;
+	}
+	IDirect3DSurface9* prevRT = nullptr;
+	IDirect3DSurface9* backBuf = nullptr;
+	const bool havePrev = (dev->GetRenderTarget(0, &prevRT) == D3D_OK);
+	if (dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backBuf) == D3D_OK && backBuf != nullptr) {
+		dev->SetRenderTarget(0, backBuf);
+	}
+	ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+	if (havePrev && prevRT != nullptr) {
+		dev->SetRenderTarget(0, prevRT);
+	}
+	if (backBuf != nullptr) backBuf->Release();
+	if (prevRT != nullptr) prevRT->Release();
+}
+
 void overlay::Render(const HWND hWnd, const LPDIRECT3DDEVICE9 pDevice) {
 	if (!overlay::imGuiInitialized) {
 		ImGui::CreateContext();
@@ -2400,7 +2447,7 @@ void overlay::Render(const HWND hWnd, const LPDIRECT3DDEVICE9 pDevice) {
 		ImGui::PopFont();
 		ImGui::EndFrame();
 		ImGui::Render();
-		ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+		PresentImGui(pDevice);
 		return;
 	}
 
@@ -2460,5 +2507,5 @@ void overlay::Render(const HWND hWnd, const LPDIRECT3DDEVICE9 pDevice) {
 	ImGui::PopFont();
 	ImGui::EndFrame();
 	ImGui::Render();
-	ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+	PresentImGui(pDevice);
 }

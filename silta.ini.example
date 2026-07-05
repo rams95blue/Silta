@@ -36,6 +36,11 @@ tip_fade = false
 ; Seconds the tip bar stays before fading (when tip_fade = true).
 tip_fade_seconds = 8
 ; Remember dragged overlay/notes/sketch window positions across game restarts.
+; *** EXPERIMENTAL *** Render the overlay onto the real back buffer instead of
+; the currently-bound target. Fixes the overlay vanishing when Source
+; post-processing is off (mat_postprocess_enable 0). Leave false unless you hit
+; that.
+force_backbuffer_render = false
 save_layout = true
 ; ===== Focus fade (immersion) =====
 ; When on, the counters overlay rests nearly transparent and "wakes up" to full
@@ -139,10 +144,9 @@ asset_tag = true
 ; show a themed in-game popup with the verdict.
 [report]
 enabled = true
-; Comma-separated map-name fragments that count as "the end" (the report fires
-; when the current map name contains any). Edit to match your build's epilogue
-; map - check it in console with 'status' or the top-right HUD.
-ending_maps = infra_c10_m3_reactor,epilogue,outro,ending
+; Comma-separated map-name fragments that count as "the end"; the report fires
+; when the current map name contains any of them.
+ending_maps = infra_c11_ending_1,infra_c11_ending_2,infra_c11_ending_3
 ; How long the report popup stays on screen.
 popup_seconds = 12.0
 ; *** DEBUG ONLY *** Press this key to force the end-of-game report (file + popup)
@@ -389,9 +393,9 @@ bind6_cmd =
 ; ============================================================
 
 ; ===== Logging =====
-; *** DEBUG ONLY *** Verbose silta.log: timestamps every line, flushes
-; immediately (a crash leaves the last action in the log), and adds debug
-; breadcrumbs. Leave off in normal play; turn on when hunting a bug.
+; Verbose silta.log: timestamps every line, flushes immediately (a crash leaves
+; the last action in the log), and adds debug breadcrumbs. Turn on when hunting
+; a bug or filing a report.
 [log]
 verbose = false
 
@@ -401,3 +405,6 @@ verbose = false
 enabled = true
 ; Corner: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right.
 corner = 3
+; Main-menu watermark text. Empty = "SILTA v<version>" automatically; set any
+; string to override it.
+text =

@@ -7,9 +7,11 @@ namespace overlay {
 	// SILTA - Finnish for "bridge": Siltanen's field kit, bridging INFRA to your
 	// survey tools. Bump kVersion per release.
 	constexpr const char* kModName = "SILTA";
-	constexpr const char* kVersion = "0.91";
+	constexpr const char* kVersion = "0.912";
 	extern bool  watermark;         // small corner tag with name+version (menu only)
 	extern int   watermarkCorner;   // 0 TL, 1 TR, 2 BL, 3 BR
+	extern std::string watermarkText; // override text (empty = "SILTA v<ver>")
+	extern bool  forceBackbuffer;   // EXPERIMENTAL: force back buffer as RT before draw
 	extern bool  inMenu;            // true while no map is loaded (main menu)
 
 	enum class Corner { TopLeft, TopRight, BottomLeft, BottomRight };
