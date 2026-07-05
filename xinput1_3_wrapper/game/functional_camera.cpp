@@ -676,8 +676,8 @@ release:
 	if (pSrcSurface != nullptr) pSrcSurface->Release();
 }
 
-static void ExtractAndSaveCameraImage(LPDIRECT3DDEVICE9 pDevice, const CInfraCameraFreezeFrame* freezeFrame) {
-	if (freezeFrame->m_pImage == nullptr) {
+static void ExtractAndSaveCameraImageInner(LPDIRECT3DDEVICE9 pDevice, const CInfraCameraFreezeFrame* freezeFrame) {
+	if (freezeFrame == nullptr || freezeFrame->m_pImage == nullptr) {
 		return;
 	}
 
@@ -716,6 +716,26 @@ static void ExtractAndSaveCameraImage(LPDIRECT3DDEVICE9 pDevice, const CInfraCam
 	}
 
 	StretchAndSaveCameraImage(pDevice, texHandles[0]->m_pTexture0);
+}
+
+// SEH-guarded wrapper. The freeze-frame -> material -> texture walk above reads
+// game-owned pointers that can dangle after loading a save (the material system
+// rebuilds its texture cache), so an access violation there would crash the
+// game. Catch it, log it, skip the photo. No C++ unwinding objects live in this
+// frame (only 'crashed'), which is what makes __try/__except legal here.
+static void ExtractAndSaveCameraImage(LPDIRECT3DDEVICE9 pDevice, const CInfraCameraFreezeFrame* freezeFrame) {
+	bool crashed = false;
+	__try {
+		ExtractAndSaveCameraImageInner(pDevice, freezeFrame);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		crashed = true;
+	}
+	if (crashed) {
+		g_LogWriter << "camera: access violation caught during photo save - photo "
+			"skipped (stale freeze-frame/texture pointer, typically after loading a save)"
+			<< std::endl;
+		g_LogWriter.flush();
+	}
 }
 
 // Per-frame calibration hunt (throttled to 2 Hz). While [camera] calibrate holds
@@ -767,4 +787,12 @@ void mod::functional_camera::EndScene(LPDIRECT3DDEVICE9 pDevice) {
 	if (InterlockedCompareExchange(&g_ShouldSaveImage, 0, 1)) {
 		ExtractAndSaveCameraImage(pDevice, g_FreezeFrame);
 	}
+}
+
+// Drop any pending capture. Called on map/save load: a photo latched on the game
+// thread just before the load must not fire against a freeze-frame that now
+// points into a rebuilt texture cache.
+void mod::functional_camera::ResetPendingCapture() {
+	InterlockedExchange(&g_ShouldSaveImage, 0);
+	g_FreezeFrame = nullptr;
 }

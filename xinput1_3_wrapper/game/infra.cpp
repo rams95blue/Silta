@@ -272,6 +272,60 @@ namespace infra {
 
 // Parse a hex colour string ("RRGGBB" or "RRGGBBAA", optional leading '#') into
 // an ImVec4. Returns `fallback` if the string is malformed.
+// Parse a hotkey value: key names ("F5", "INSERT", "A"), hex ("0x74") and
+// decimal virtual-key codes ("116") are all accepted. Unknown -> fallback.
+static int ParseKeyValue(const std::string& in, int fallback) {
+	std::string v = in;
+	const size_t a = v.find_first_not_of(" \t");
+	const size_t b = v.find_last_not_of(" \t");
+	if (a == std::string::npos) return fallback;
+	v = v.substr(a, b - a + 1);
+	std::string u = v;
+	for (char& c : u) c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
+
+	// hex / decimal
+	if (u.size() > 2 && u[0] == '0' && u[1] == 'X') {
+		return static_cast<int>(strtoul(u.c_str() + 2, nullptr, 16));
+	}
+	bool digits = !u.empty();
+	for (char c : u) if (!isdigit(static_cast<unsigned char>(c))) { digits = false; break; }
+	// A single digit means the keyboard key '0'..'9' (VK 0x30..0x39) - decimal
+	// virtual-key codes 0..9 are not bindable keys anyway.
+	if (digits && u.size() > 1) return atoi(u.c_str());
+
+	// F1..F24
+	if (u.size() >= 2 && u[0] == 'F') {
+		bool num = true;
+		for (size_t i = 1; i < u.size(); ++i) if (!isdigit(static_cast<unsigned char>(u[i]))) { num = false; break; }
+		if (num) {
+			const int n = atoi(u.c_str() + 1);
+			if (n >= 1 && n <= 24) return VK_F1 + (n - 1);
+		}
+	}
+	// named keys
+	struct KV { const char* n; int vk; };
+	static const KV kNames[] = {
+		{ "INSERT", VK_INSERT }, { "INS", VK_INSERT }, { "DELETE", VK_DELETE }, { "DEL", VK_DELETE },
+		{ "HOME", VK_HOME }, { "END", VK_END }, { "PAGEUP", VK_PRIOR }, { "PGUP", VK_PRIOR },
+		{ "PAGEDOWN", VK_NEXT }, { "PGDN", VK_NEXT }, { "UP", VK_UP }, { "DOWN", VK_DOWN },
+		{ "LEFT", VK_LEFT }, { "RIGHT", VK_RIGHT }, { "SPACE", VK_SPACE }, { "TAB", VK_TAB },
+		{ "BACKSPACE", VK_BACK }, { "PAUSE", VK_PAUSE }, { "SCROLLLOCK", VK_SCROLL },
+		{ "NUMPAD0", VK_NUMPAD0 }, { "NUMPAD1", VK_NUMPAD1 }, { "NUMPAD2", VK_NUMPAD2 },
+		{ "NUMPAD3", VK_NUMPAD3 }, { "NUMPAD4", VK_NUMPAD4 }, { "NUMPAD5", VK_NUMPAD5 },
+		{ "NUMPAD6", VK_NUMPAD6 }, { "NUMPAD7", VK_NUMPAD7 }, { "NUMPAD8", VK_NUMPAD8 },
+		{ "NUMPAD9", VK_NUMPAD9 },
+	};
+	for (const KV& kv : kNames) {
+		if (u == kv.n) return kv.vk;
+	}
+	// single character A-Z / 0-9
+	if (u.size() == 1 && (isalnum(static_cast<unsigned char>(u[0])))) {
+		return static_cast<int>(u[0]); // VK codes for A-Z/0-9 match ASCII uppercase
+	}
+	LogE("hotkeys: unrecognized key value '" + v + "' - keeping default");
+	return fallback;
+}
+
 static ImVec4 ParseHexColor(const std::string& in, const ImVec4& fallback) {
 	std::string s = in;
 	const size_t a = s.find_first_not_of(" \t");
@@ -374,6 +428,41 @@ static void EngineClientCmd(void* engineClient, int vtableIndex, const char* cmd
 	using ClientCmdFn = void(__thiscall*)(void*, const char*);
 	ClientCmdFn fn = reinterpret_cast<ClientCmdFn>(vtable[vtableIndex]);
 	fn(engineClient, cmd);
+}
+
+// Debug key -> console-command binds ([tweaks] bindN_key/bindN_cmd). Pressing a
+// bound key runs its console command via IVEngineClient::ClientCmd. Keydowns are
+// caught on the window thread but the engine call is deferred to the render
+// thread (drained in EndScene), matching the photo-save pattern.
+struct TweakBind { int vk; std::string cmd; };
+static std::vector<TweakBind> g_TweakKeyBinds;
+static std::mutex g_PendingCmdMx;
+static std::vector<std::string> g_PendingTweakCmds;
+
+void overlay::RunTweakKey(int vk) {
+	if (!g_TweaksEnabled || vk == 0) return;
+	for (const TweakBind& b : g_TweakKeyBinds) {
+		if (b.vk == vk) {
+			std::lock_guard<std::mutex> lk(g_PendingCmdMx);
+			g_PendingTweakCmds.push_back(b.cmd);
+		}
+	}
+}
+
+static void DrainTweakKeyCommands() {
+	std::vector<std::string> pending;
+	{
+		std::lock_guard<std::mutex> lk(g_PendingCmdMx);
+		if (g_PendingTweakCmds.empty()) return;
+		pending.swap(g_PendingTweakCmds);
+	}
+	void* ec = ResolveEngineClient();
+	if (ec == nullptr) return;
+	for (const std::string& cmd : pending) {
+		EngineClientCmd(ec, g_TweakClientCmdIndex, cmd.c_str());
+		g_LogWriter << "tweaks: key-bind ran '" << cmd << "'" << std::endl;
+	}
+	g_LogWriter.flush();
 }
 
 // Run all configured console commands. Called on each map load so cvars that the
@@ -725,20 +814,27 @@ static void load_config() {
 			"; build's epilogue map (check it in console with 'status' or the top-right HUD).");
 		config.SetDoubleValue("report", "popup_seconds", 12.0,
 			"; How long the report popup stays on screen.");
+		config.SetValue("report", "debug_trigger", "",
+			"; *** DEBUG ONLY *** Press this key to force the end-of-game report (file\n"
+			"; + popup) from the current counters, for testing. Empty = disabled.\n"
+			"; Accepts names/hex/decimal like [hotkeys], e.g. X.");
 
-		config.SetLongValue("hotkeys", "reload_config", VK_F6,
+		config.SetValue("hotkeys", "reload_config", "F6",
+			"; ===== Hotkeys =====\n"
+			"; Keys accept names (F1..F12, INSERT, HOME, A..Z, NUMPAD0..9...), hex\n"
+			"; (0x74) or decimal virtual-key codes (116).\n"
 			"; ===== Hotkeys (Win32 virtual-key codes; 0 = disabled) =====\n; F6=0x75 F7=0x76 F8=0x77 F9=0x78 F10=0x79 F11=0x7A F12=0x7B. INS still toggles all.\n; Reload this ini live (colors/corners/sizes) without restarting.");
-		config.SetLongValue("hotkeys", "toggle_counters", VK_F7, "; Show/hide the counters overlay.");
-		config.SetLongValue("hotkeys", "toggle_inventory", VK_F8, "; Show/hide the battery overlay.");
-		config.SetLongValue("hotkeys", "cycle_counters_corner", VK_F9, "; Move counters to the next screen corner.");
-		config.SetLongValue("hotkeys", "cycle_inventory_corner", VK_F10, "; Move inventory to the next screen corner.");
-		config.SetLongValue("hotkeys", "toggle_lock", VK_F11, "; Unlock to drag overlays with the mouse; lock snaps them back.");
-		config.SetLongValue("hotkeys", "reset_position", VK_F12, "; Snap both overlays back to their configured corners.");
-		config.SetLongValue("hotkeys", "toggle_notes", VK_F4, "; Show/hide the notes scratchpad.");
-		config.SetLongValue("hotkeys", "toggle_sketch", VK_F3, "; Show/hide the NCG sketchbook.");
-		config.SetLongValue("hotkeys", "toggle_calculator", VK_F2, "; Show/hide the field calculator (incl. cipher/programmer tools).");
-		config.SetLongValue("hotkeys", "toggle_ending", VK_F1, "; Show/hide the study-outlook (ending predictor) panel.");
-		config.SetLongValue("hotkeys", "toggle_contact", VK_F5, "; Show/hide the photo contact sheet.");
+		config.SetValue("hotkeys", "toggle_counters", "F7", "; Show/hide the counters overlay.");
+		config.SetValue("hotkeys", "toggle_inventory", "F8", "; Show/hide the battery overlay.");
+		config.SetValue("hotkeys", "cycle_counters_corner", "F9", "; Move counters to the next screen corner.");
+		config.SetValue("hotkeys", "cycle_inventory_corner", "F10", "; Move inventory to the next screen corner.");
+		config.SetValue("hotkeys", "toggle_lock", "F11", "; Unlock to drag overlays with the mouse; lock snaps them back.");
+		config.SetValue("hotkeys", "reset_position", "F12", "; Snap both overlays back to their configured corners.");
+		config.SetValue("hotkeys", "toggle_notes", "F4", "; Show/hide the notes scratchpad.");
+		config.SetValue("hotkeys", "toggle_sketch", "F3", "; Show/hide the NCG sketchbook.");
+		config.SetValue("hotkeys", "toggle_calculator", "F2", "; Show/hide the field calculator (incl. cipher/programmer tools).");
+		config.SetValue("hotkeys", "toggle_ending", "F1", "; Show/hide the study-outlook (ending predictor) panel.");
+		config.SetValue("hotkeys", "toggle_contact", "F5", "; Show/hide the photo contact sheet.");
 		config.SetValue("hotkeys", "key_color", "",
 			"; Hotkey tip bar styling (hex RRGGBB). Empty = follow the overlay theme\n"
 			"; colors (complete_color for keys, text_color for descriptions).");
@@ -748,6 +844,26 @@ static void load_config() {
 			"; ===== Engine tweaks (ADVANCED, off by default) =====\n; Runs console commands on each map load via IVEngineClient.\n; engine_interface: leave blank to auto-try common versions, or set one.\n; clientcmd_index: IVEngineClient::ClientCmd vtable slot - VERIFY before enabling,\n; a wrong index can crash. Any other key here is treated as a command to run,\n; e.g.  captions = closecaption 1");
 		config.SetValue("tweaks", "engine_interface", "");
 		config.SetLongValue("tweaks", "clientcmd_index", 7);
+		config.SetValue("tweaks", "bind1_key", "",
+			"; *** DEBUG ONLY *** Key -> console-command binds. Press the key in-game\n"
+			"; to run the command (works during normal play, no need to open the\n"
+			"; overlay). Keys accept names/hex/decimal like [hotkeys]. All empty by\n"
+			"; default. Requires enabled = true above. Examples:\n"
+			";   bind1_key = 0     bind1_cmd = ent_fire !picker unlock\n"
+			";   bind2_key = 9     bind2_cmd = ent_fire !picker lock\n"
+			";   bind3_key = HOME  bind3_cmd = incrementvar mat_postprocess_enable 0 1 1\n"
+			";   bind4_key = END   bind4_cmd = incrementvar developer 0 1 1");
+		config.SetValue("tweaks", "bind1_cmd", "");
+		config.SetValue("tweaks", "bind2_key", "");
+		config.SetValue("tweaks", "bind2_cmd", "");
+		config.SetValue("tweaks", "bind3_key", "");
+		config.SetValue("tweaks", "bind3_cmd", "");
+		config.SetValue("tweaks", "bind4_key", "");
+		config.SetValue("tweaks", "bind4_cmd", "");
+		config.SetValue("tweaks", "bind5_key", "");
+		config.SetValue("tweaks", "bind5_cmd", "");
+		config.SetValue("tweaks", "bind6_key", "");
+		config.SetValue("tweaks", "bind6_cmd", "");
 
 		config.SaveFile("silta.ini");
 
@@ -840,18 +956,18 @@ static void load_config() {
 	overlay::progressSeconds = static_cast<float>(config.GetDoubleValue("counters", "progress_seconds", 5.0));
 
 	// ----- Hotkeys -----
-	overlay::hotkeys.reloadConfig         = config.GetLongValue("hotkeys", "reload_config",          overlay::hotkeys.reloadConfig);
-	overlay::hotkeys.toggleCounters       = config.GetLongValue("hotkeys", "toggle_counters",        overlay::hotkeys.toggleCounters);
-	overlay::hotkeys.toggleInventory      = config.GetLongValue("hotkeys", "toggle_inventory",       overlay::hotkeys.toggleInventory);
-	overlay::hotkeys.cycleCountersCorner  = config.GetLongValue("hotkeys", "cycle_counters_corner",  overlay::hotkeys.cycleCountersCorner);
-	overlay::hotkeys.cycleInventoryCorner = config.GetLongValue("hotkeys", "cycle_inventory_corner", overlay::hotkeys.cycleInventoryCorner);
-	overlay::hotkeys.toggleLock           = config.GetLongValue("hotkeys", "toggle_lock",            overlay::hotkeys.toggleLock);
-	overlay::hotkeys.resetPosition        = config.GetLongValue("hotkeys", "reset_position",         overlay::hotkeys.resetPosition);
-	overlay::hotkeys.toggleNotes          = config.GetLongValue("hotkeys", "toggle_notes",           overlay::hotkeys.toggleNotes);
-	overlay::hotkeys.toggleSketch         = config.GetLongValue("hotkeys", "toggle_sketch",          overlay::hotkeys.toggleSketch);
-	overlay::hotkeys.toggleCalculator     = config.GetLongValue("hotkeys", "toggle_calculator",      overlay::hotkeys.toggleCalculator);
-	overlay::hotkeys.toggleEnding         = config.GetLongValue("hotkeys", "toggle_ending",          overlay::hotkeys.toggleEnding);
-	overlay::hotkeys.toggleContact        = config.GetLongValue("hotkeys", "toggle_contact",         overlay::hotkeys.toggleContact);
+	overlay::hotkeys.reloadConfig = ParseKeyValue(config.GetValue("hotkeys", "reload_config", ""), overlay::hotkeys.reloadConfig);
+	overlay::hotkeys.toggleCounters = ParseKeyValue(config.GetValue("hotkeys", "toggle_counters", ""), overlay::hotkeys.toggleCounters);
+	overlay::hotkeys.toggleInventory = ParseKeyValue(config.GetValue("hotkeys", "toggle_inventory", ""), overlay::hotkeys.toggleInventory);
+	overlay::hotkeys.cycleCountersCorner = ParseKeyValue(config.GetValue("hotkeys", "cycle_counters_corner", ""), overlay::hotkeys.cycleCountersCorner);
+	overlay::hotkeys.cycleInventoryCorner = ParseKeyValue(config.GetValue("hotkeys", "cycle_inventory_corner", ""), overlay::hotkeys.cycleInventoryCorner);
+	overlay::hotkeys.toggleLock = ParseKeyValue(config.GetValue("hotkeys", "toggle_lock", ""), overlay::hotkeys.toggleLock);
+	overlay::hotkeys.resetPosition = ParseKeyValue(config.GetValue("hotkeys", "reset_position", ""), overlay::hotkeys.resetPosition);
+	overlay::hotkeys.toggleNotes = ParseKeyValue(config.GetValue("hotkeys", "toggle_notes", ""), overlay::hotkeys.toggleNotes);
+	overlay::hotkeys.toggleSketch = ParseKeyValue(config.GetValue("hotkeys", "toggle_sketch", ""), overlay::hotkeys.toggleSketch);
+	overlay::hotkeys.toggleCalculator = ParseKeyValue(config.GetValue("hotkeys", "toggle_calculator", ""), overlay::hotkeys.toggleCalculator);
+	overlay::hotkeys.toggleEnding = ParseKeyValue(config.GetValue("hotkeys", "toggle_ending", ""), overlay::hotkeys.toggleEnding);
+	overlay::hotkeys.toggleContact = ParseKeyValue(config.GetValue("hotkeys", "toggle_contact", ""), overlay::hotkeys.toggleContact);
 
 	// ----- Tweaks (console commands) -----
 	g_TweaksEnabled = config.GetBoolValue("tweaks", "enabled", false);
@@ -863,13 +979,25 @@ static void load_config() {
 		config.GetAllKeys("tweaks", keys);
 		for (const auto& entry : keys) {
 			const std::string kl = ToLower(entry.pItem);
-			if (kl == "enabled" || kl == "engine_interface" || kl == "clientcmd_index") {
-				continue;
+			if (kl == "enabled" || kl == "engine_interface" || kl == "clientcmd_index" ||
+				kl.compare(0, 4, "bind") == 0) {
+				continue; // bind*_key/bind*_cmd handled separately below
 			}
 			const char* cmd = config.GetValue("tweaks", entry.pItem, "");
 			if (cmd != nullptr && *cmd != '\0') {
 				g_TweakCommands.emplace_back(cmd);
 			}
+		}
+	}
+	g_TweakKeyBinds.clear();
+	for (int i = 1; i <= 6; ++i) {
+		char kk[16], ck[16];
+		sprintf_s(kk, sizeof(kk), "bind%d_key", i);
+		sprintf_s(ck, sizeof(ck), "bind%d_cmd", i);
+		const int vk = ParseKeyValue(config.GetValue("tweaks", kk, ""), 0);
+		const char* cmd = config.GetValue("tweaks", ck, "");
+		if (vk != 0 && cmd != nullptr && *cmd != '\0') {
+			g_TweakKeyBinds.push_back({ vk, cmd });
 		}
 	}
 
@@ -1003,6 +1131,7 @@ static void load_config() {
 	if (overlay::watermarkCorner < 0 || overlay::watermarkCorner > 3) overlay::watermarkCorner = 3;
 	g_ReportEnabled = config.GetBoolValue("report", "enabled", true);
 	g_ReportSeconds = static_cast<float>(config.GetDoubleValue("report", "popup_seconds", 12.0));
+	overlay::debugReportKey = ParseKeyValue(config.GetValue("report", "debug_trigger", ""), 0);
 	{
 		g_ReportTokens.clear();
 		std::string list = config.GetValue("report", "ending_maps", "infra_c10_m3_reactor,epilogue,outro,ending");
@@ -1168,6 +1297,8 @@ static const char* const kSiltaBanner[] = {
 
 // Build the end-of-game N.C.G. survey report from the live counters, write it to
 // the game folder, and pop a themed summary card. Fires once per ending-map load.
+static void DoGenerateSurveyReport(const char* map_name);
+
 static void MaybeGenerateSurveyReport(const char* map_name) {
 	if (!g_ReportEnabled || map_name == nullptr) return;
 	std::string mn = ToLower(map_name);
@@ -1178,7 +1309,10 @@ static void MaybeGenerateSurveyReport(const char* map_name) {
 	if (!match) return;
 	if (g_ReportLastMap == map_name) return; // already done for this load
 	g_ReportLastMap = map_name;
+	DoGenerateSurveyReport(map_name);
+}
 
+static void DoGenerateSurveyReport(const char* map_name) {
 	static const char* const kNames[overlay::CategoryCount] = {
 		"Photographs", "Corruption ", "Repairs    ", "Geocaches  ", "Flow meters" };
 	int totCur = 0, totMax = 0;
@@ -1231,6 +1365,15 @@ static void MaybeGenerateSurveyReport(const char* map_name) {
 
 void __fastcall InitMapStats(void* this_ptr) {
 	InitMapStats_orig(this_ptr);
+	// A save/level load rebuilds the texture cache; drop any latched photo so it
+	// can't fire against a stale freeze-frame.
+	mod::functional_camera::ResetPendingCapture();
+	{
+		// Diagnostic: if counters "reset on minimize" for someone, this line in
+		// their silta.log shows whether the game re-ran per-map stat init.
+		const char* dmn = g_Engine ? g_Engine->get_map_name() : nullptr;
+		LogI(std::string("map: InitMapStats (") + (dmn ? dmn : "?") + ")");
+	}
 
 	if (g_SuccessCountersEnabled) {
 		mod::counters::InitMapStats();
@@ -1253,6 +1396,9 @@ void __fastcall InitMapStats(void* this_ptr) {
 
 	// Re-apply engine tweaks (cvars/commands the engine may reset between maps).
 	apply_tweaks();
+
+	// Run any debug key-bind console commands queued from the window thread.
+	DrainTweakKeyCommands();
 }
 
 int __fastcall StatSuccess(void* this_ptr, int, const int event_type, const int count, const bool is_new) {
@@ -1303,6 +1449,20 @@ HRESULT __stdcall EndScene(const LPDIRECT3DDEVICE9 pDevice) {
 
 	// Flashlight-charge autoscan (no-op unless [inventory] charge_autoscan is on).
 	mod::inventory::ChargeAutoscanTick();
+
+	// Re-resolve inventory counters if the map loaded before the player existed
+	// (fixes empty inventory + dead gauge after chapter loads).
+	mod::inventory::RetryTick();
+
+	// *** DEBUG ONLY *** force the end-of-game report via the [report]
+	// debug_trigger key. Serviced here (per frame) so it fires immediately, not
+	// on the next map load.
+	if (overlay::forceReportRequested) {
+		overlay::forceReportRequested = false;
+		const char* mn = g_Engine->get_map_name();
+		DoGenerateSurveyReport(mn ? mn : "DEBUG");
+		LogI("report: forced via debug_trigger key");
+	}
 
 	// Origin calibration hunt (no-op unless [camera] calibrate is set and unfound).
 	mod::functional_camera::CalibrationTick();

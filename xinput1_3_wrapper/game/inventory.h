@@ -20,6 +20,11 @@ namespace mod {
 		// 0..1000). On a unique match it adopts the offset live and reports it.
 		void ChargeAutoscanTick();
 
+		// Call once per frame: if the counter pointers failed to resolve on map
+		// load (chapter loads can run InitMapStats before the player entity
+		// exists), retry once a second until they do.
+		void RetryTick();
+
 		void MapLoaded(const char *name);
 	}
 }

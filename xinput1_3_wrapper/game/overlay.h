@@ -7,7 +7,7 @@ namespace overlay {
 	// SILTA - Finnish for "bridge": Siltanen's field kit, bridging INFRA to your
 	// survey tools. Bump kVersion per release.
 	constexpr const char* kModName = "SILTA";
-	constexpr const char* kVersion = "0.9";
+	constexpr const char* kVersion = "0.91";
 	extern bool  watermark;         // small corner tag with name+version (menu only)
 	extern int   watermarkCorner;   // 0 TL, 1 TR, 2 BL, 3 BR
 	extern bool  inMenu;            // true while no map is loaded (main menu)
@@ -137,6 +137,9 @@ namespace overlay {
 	// Brief on-screen toast (e.g. camera save confirmation). seconds <= 0 = off.
 	void ShowToast(const std::string& text, float seconds);
 	void ShowReport(const std::string& title, const std::string& body, float seconds);
+	extern int debugReportKey;            // *** DEBUG ONLY *** key to force the report (0 = off)
+	extern volatile bool forceReportRequested; // set by the debug key, serviced in EndScene
+	void RunTweakKey(int vk);             // run a [tweaks] key-bind command (if any)
 }
 
 // Leveled logging into silta.log (defined in infra.cpp). LogV lines only appear

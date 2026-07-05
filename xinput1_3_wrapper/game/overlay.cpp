@@ -10,6 +10,9 @@
 #include <cctype>
 #include <cmath>
 #include <initializer_list>
+#include "brad.h" // quack
+
+void LogI(const std::string&); // silta.log (defined in infra.cpp)
 #include "inventory.h"
 #include "counters.h"
 #include "functional_camera.h"
@@ -165,6 +168,8 @@ int  overlay::currentAct = 1;
 bool overlay::locked = true;
 bool overlay::forceReposition = false;
 bool overlay::reloadRequested = false;
+int overlay::debugReportKey = 0;
+volatile bool overlay::forceReportRequested = false;
 overlay::Hotkeys overlay::hotkeys = {
 	VK_F6,  // reloadConfig
 	VK_F7,  // toggleCounters
@@ -419,20 +424,23 @@ static void RenderCounters() {
 	// Size the window to the widest visible row (map name, any shown counter row,
 	// or the total line), measuring name/value separately to include SameLine()
 	// spacing so the "/ max" part never clips. Re-applied every frame.
-	float contentWidth = ImGui::CalcTextSize(overlay::title.value.c_str()).x;
+	// Values render in a fixed column (widest visible name + spacing) so rows
+	// stay aligned regardless of label length.
+	float nameColWidth = 0.0f;
+	float valueColWidth = 0.0f;
 	int visibleCount = 0;
 	for (size_t i = 0; i < overlay::lines.size(); i++) {
 		if (i < static_cast<size_t>(overlay::CategoryCount) && !overlay::categoryVisible[i]) {
 			continue;
 		}
 		const overlay::OverlayLine_t& line = overlay::lines[i];
-		const float rowWidth =
-			ImGui::CalcTextSize(line.name.c_str()).x +
-			style.ItemSpacing.x +
-			ImGui::CalcTextSize(line.value.c_str()).x;
-		contentWidth = std::max(contentWidth, rowWidth);
+		nameColWidth = std::max(nameColWidth, ImGui::CalcTextSize(line.name.c_str()).x);
+		valueColWidth = std::max(valueColWidth, ImGui::CalcTextSize(line.value.c_str()).x);
 		visibleCount++;
 	}
+	const float valueColumn = style.WindowPadding.x + nameColWidth + style.ItemSpacing.x;
+	float contentWidth = std::max(ImGui::CalcTextSize(overlay::title.value.c_str()).x,
+		nameColWidth + style.ItemSpacing.x + valueColWidth);
 	if (overlay::showTotal) {
 		contentWidth = std::max(contentWidth, ImGui::CalcTextSize(totalStr.c_str()).x);
 	}
@@ -472,7 +480,7 @@ static void RenderCounters() {
 		}
 
 		ImGui::TextColored(color, line.name.c_str());
-		ImGui::SameLine();
+		ImGui::SameLine(valueColumn);
 		ImGui::TextColored(line.valueColor, line.value.c_str());
 	}
 
@@ -787,6 +795,35 @@ void overlay::SaveNotes() {
 // Text persists to disk; the window has its own title bar so it can be dragged,
 // resized and closed independently of the locked HUD overlays. With the "pad"
 // skin it's drawn as a yellow legal pad with ruled lines and a red margin.
+// ---- Brad the duck Easter egg (Notes: type "quack") ----
+// When "quack" appears, the notepad briefly shows this little duck, then the
+// text you typed returns. The swap is done through the InputText callback
+// because ImGui owns the buffer state while the field is focused.
+namespace {
+	const char* const kQuackDuck =
+		"                     __\n"
+		"                   <(o )___\n"
+		"                    ( ._> /      Q U A C K.\n"
+		"                     `---'  \n";
+	char   g_QuackBackup[sizeof(g_NotesBuffer)] = { 0 };
+	double g_QuackFlourishUntil = 0.0;
+	bool   g_QuackHatched = false;
+	int    g_QuackAction = 0; // 0 = none, 1 = show duck, 2 = restore text
+}
+
+static int NotesQuackCallback(ImGuiInputTextCallbackData* data) {
+	if (g_QuackAction == 1) {
+		data->DeleteChars(0, data->BufTextLen);
+		data->InsertChars(0, kQuackDuck);
+		g_QuackAction = 0;
+	} else if (g_QuackAction == 2) {
+		data->DeleteChars(0, data->BufTextLen);
+		data->InsertChars(0, g_QuackBackup);
+		g_QuackAction = 0;
+	}
+	return 0;
+}
+
 static void RenderNotes() {
 	if (!g_NotesLoaded) {
 		overlay::LoadNotes();
@@ -886,7 +923,47 @@ static void RenderNotes() {
 			dl->AddLine(ImVec2(marginX, p0.y), ImVec2(marginX, p1.y), marginCol, 1.0f);
 		}
 
-		ImGui::InputTextMultiline("##notes", g_NotesBuffer, sizeof(g_NotesBuffer), avail, ImGuiInputTextFlags_AllowTabInput);
+		ImGui::InputTextMultiline("##notes", g_NotesBuffer, sizeof(g_NotesBuffer), avail,
+			ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackAlways, NotesQuackCallback);
+
+		// Easter egg: type "quack" in the notes -> Brad flourishes here for a
+		// moment (the notepad briefly becomes a little duck) before your text
+		// returns, and SILTA writes his colored portrait to brad.ans. Fires ONCE
+		// per game run; the scan stops after it hatches. Quack.
+		{
+			const double now = ImGui::GetTime();
+			if (g_QuackFlourishUntil > 0.0) {
+				if (now >= g_QuackFlourishUntil) {
+					memcpy(g_NotesBuffer, g_QuackBackup, sizeof(g_NotesBuffer));
+					g_QuackAction = 2; // also restore via the input callback (field is focused)
+					g_QuackFlourishUntil = 0.0;
+				}
+			} else if (!g_QuackHatched) {
+				bool present = false;
+				for (const char* p = g_NotesBuffer; *p; ++p) {
+					if ((p[0] == 'q' || p[0] == 'Q') &&
+						(p[1] == 'u' || p[1] == 'U') &&
+						(p[2] == 'a' || p[2] == 'A') &&
+						(p[3] == 'c' || p[3] == 'C') &&
+						(p[4] == 'k' || p[4] == 'K')) { present = true; break; }
+				}
+				if (present) {
+					memcpy(g_QuackBackup, g_NotesBuffer, sizeof(g_QuackBackup));
+					strncpy_s(g_NotesBuffer, sizeof(g_NotesBuffer), kQuackDuck, _TRUNCATE);
+					g_QuackAction = 1; // show the duck via the input callback
+					g_QuackFlourishUntil = now + 0.6; // split-second
+
+					FILE* qf = nullptr;
+					if (fopen_s(&qf, "brad.ans", "wb") == 0 && qf) {
+						for (const char* line : kBradAnsi) { fputs(line, qf); fputc('\n', qf); }
+						fclose(qf);
+					}
+					overlay::ShowToast("Quack! Brad is loose", 6.0f);
+					LogI("quack:       warning:  Brad is loose");
+					g_QuackHatched = true; // once per run; no more scanning
+				}
+			}
+		}
 	}
 	ImGui::End();
 
@@ -2251,6 +2328,13 @@ void overlay::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 			overlay::contactShown = !overlay::contactShown;
 			if (overlay::contactShown) g_CSScanned = false; // rescan DCIM on open
 		}
+		else if (overlay::debugReportKey && vk == overlay::debugReportKey) {
+			overlay::forceReportRequested = true; // serviced on the render thread
+		}
+
+		// Debug [tweaks] key-binds run regardless of overlay focus (a keydown here
+		// still reaches the game), so postprocess/dev toggles work mid-play.
+		overlay::RunTweakKey(vk);
 	}
 
 	ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam);
@@ -2269,8 +2353,8 @@ void overlay::Render(const HWND hWnd, const LPDIRECT3DDEVICE9 pDevice) {
 			// coordinates rounded to clean values). Any drag overwrites it.
 			static const char* kDefaultLayout =
 				"[Window][Debug##Default]\nPos=60,60\nSize=400,400\nCollapsed=0\n\n"
-				"[Window][Counters]\nPos=1750,950\nSize=161,117\nCollapsed=0\n\n"
-				"[Window][Inventory]\nPos=1794,890\nSize=116,42\nCollapsed=0\n\n"
+				"[Window][Counters]\nPos=1731,940\nSize=161,117\nCollapsed=0\n\n"
+				"[Window][Inventory]\nPos=1774,881\nSize=116,42\nCollapsed=0\n\n"
 				"[Window][##progress]\nPos=440,10\nSize=396,102\nCollapsed=0\n\n"
 				"[Window][Hotkeys]\nPos=840,10\nSize=235,222\nCollapsed=0\n\n"
 				"[Window][N.C.G. Field Calculator]\nPos=1600,380\nSize=300,430\nCollapsed=0\n\n"

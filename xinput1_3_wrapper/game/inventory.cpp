@@ -134,7 +134,31 @@ static bool FindCameraAndFlashlightCounters(int**ppFlashlightCount, int**ppCamer
 	return false;
 }
 
+static std::string g_LastMapName;
+
+void mod::inventory::RetryTick() {
+	if (flashlightBatteriesCounter != nullptr) return; // resolved
+	if (g_LastMapName.empty()) return;                 // no map loaded yet
+
+	static unsigned long long lastMs = 0;
+	const unsigned long long now = GetTickCount64();
+	if (now - lastMs < 1000) return;
+	lastMs = now;
+
+	FindCameraAndFlashlightCounters(&flashlightBatteriesCounter, &cameraBatteriesCounter);
+	if (flashlightBatteriesCounter != nullptr) {
+		LogI("inventory: counters resolved on retry (player spawned after map init)");
+		// Coins live on the tenements map only; resolve them here too.
+		if (StrStrA(g_LastMapName.c_str(), "tenements") != nullptr) {
+			CMathCounter* mathCounter = reinterpret_cast<CMathCounter*>(
+				Engine()->CGlobalEntityList__FindEntityByName(nullptr, "Opensewer_coins_counter"));
+			if (mathCounter != nullptr) osCoinsCounter = &mathCounter->m_CounterValue;
+		}
+	}
+}
+
 void mod::inventory::MapLoaded(const char *name) {
+	g_LastMapName = name ? name : "";
 	osCoinsCounter = nullptr;
 	flashlightBatteriesCounter = nullptr;
 	cameraBatteriesCounter = nullptr;

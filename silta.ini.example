@@ -145,6 +145,10 @@ enabled = true
 ending_maps = infra_c10_m3_reactor,epilogue,outro,ending
 ; How long the report popup stays on screen.
 popup_seconds = 12.0
+; *** DEBUG ONLY *** Press this key to force the end-of-game report (file + popup)
+; from the current counters, for testing. Empty = disabled. Names/hex/decimal,
+; e.g. X.
+debug_trigger =
 
 ; ===== Per-category counter rows =====
 ; *_color: hex RRGGBB for that row.  *_show: false hides that row.
@@ -309,31 +313,33 @@ enabled = true
 
 ; ===== Hotkeys (Win32 virtual-key codes; 0 = disabled) =====
 ; F1=0x70 F6=0x75 F7=0x76 F8=0x77 F9=0x78 F10=0x79 F11=0x7A F12=0x7B. INS toggles all.
+; Keys accept names (F1..F12, INSERT, HOME, A..Z, NUMPAD0..9...), hex (0x74)
+; or decimal virtual-key codes (116).
 [hotkeys]
 ; Reload this ini live (colors/corners/sizes) without restarting.
-reload_config = 117
+reload_config = F6
 ; Show/hide the counters overlay.
-toggle_counters = 118
+toggle_counters = F7
 ; Show/hide the battery overlay.
-toggle_inventory = 119
+toggle_inventory = F8
 ; Move counters to the next screen corner.
-cycle_counters_corner = 120
+cycle_counters_corner = F9
 ; Move inventory to the next screen corner.
-cycle_inventory_corner = 121
+cycle_inventory_corner = F10
 ; Unlock to drag overlays with the mouse; lock snaps them back.
-toggle_lock = 122
+toggle_lock = F11
 ; Snap both overlays back to their configured corners.
-reset_position = 123
+reset_position = F12
 ; Show/hide the notes scratchpad.
-toggle_notes = 115
+toggle_notes = F4
 ; Show/hide the NCG sketchbook.
-toggle_sketch = 114
+toggle_sketch = F3
 ; Show/hide the field calculator (basic / scientific / programmer / text-cipher).
-toggle_calculator = 113
+toggle_calculator = F2
 ; Show/hide the study-outlook (ending predictor) panel.
-toggle_ending = 112
+toggle_ending = F1
 ; Show/hide the photo contact sheet.
-toggle_contact = 116
+toggle_contact = F5
 ; Hotkey tip bar styling (hex RRGGBB). Empty = follow the overlay theme colors
 ; (complete_color for keys, text_color for descriptions).
 key_color =
@@ -349,6 +355,26 @@ text_color =
 enabled = false
 engine_interface =
 clientcmd_index = 7
+; *** DEBUG ONLY *** Key -> console-command binds. Press the key in-game to run
+; the command (works during normal play, no need to open the overlay). Keys
+; accept names/hex/decimal like [hotkeys]. All empty by default; requires
+; enabled = true above. Examples:
+;   bind1_key = 0     bind1_cmd = ent_fire !picker unlock
+;   bind2_key = 9     bind2_cmd = ent_fire !picker lock
+;   bind3_key = HOME  bind3_cmd = incrementvar mat_postprocess_enable 0 1 1
+;   bind4_key = END   bind4_cmd = incrementvar developer 0 1 1
+bind1_key =
+bind1_cmd =
+bind2_key =
+bind2_cmd =
+bind3_key =
+bind3_cmd =
+bind4_key =
+bind4_cmd =
+bind5_key =
+bind5_cmd =
+bind6_key =
+bind6_cmd =
 
 ; ============================================================
 ; Hotkeys above use Win32 Virtual-Key codes (decimal).

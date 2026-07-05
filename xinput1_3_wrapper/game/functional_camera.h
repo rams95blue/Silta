@@ -51,5 +51,6 @@ namespace mod {
 
 		void OnTakePicture(infra::structs::CInfraCameraFreezeFrame* freezeFrame);
 		void EndScene(LPDIRECT3DDEVICE9 pDevice);
+		void ResetPendingCapture(); // clear a latched photo on map/save load
 	}
 }
