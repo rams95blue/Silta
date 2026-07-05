@@ -13,6 +13,7 @@
 #include "brad.h" // quack
 
 void LogI(const std::string&); // silta.log (defined in infra.cpp)
+void LogV(const std::string&); // silta.log verbose (defined in infra.cpp)
 #include "inventory.h"
 #include "counters.h"
 #include "functional_camera.h"
@@ -2281,8 +2282,23 @@ void overlay::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 		const int vk = static_cast<int>(wParam);
 		const overlay::Hotkeys& hk = overlay::hotkeys;
 
+		// Verbose: record every key-down the overlay actually receives, with the
+		// scancode and extended-key flag so the *physical* key is identifiable.
+		// Several physical keys share one virtual-key code - notably Numpad 0 with
+		// NumLock OFF sends VK_INSERT (0x2D), same as the dedicated Insert key
+		// (ext=1 = dedicated Insert/nav cluster, ext=0 = numpad with NumLock off).
+		{
+			const int sc = (lParam >> 16) & 0xFF;
+			const int ext = (lParam >> 24) & 0x1;
+			char kb[80];
+			sprintf_s(kb, sizeof(kb), "hotkey: keydown vk=0x%02X scancode=0x%02X ext=%d", vk, sc, ext);
+			LogV(kb);
+		}
+
 		if (vk == Base::Data::Keys::ToggleMenu) {
 			overlay::shown = !overlay::shown;
+			LogV(overlay::shown ? "hotkey: overlays SHOWN (toggle-menu)"
+				: "hotkey: overlays HIDDEN (toggle-menu / Insert) - this hides ALL overlays");
 		}
 		else if (hk.reloadConfig && vk == hk.reloadConfig) {
 			overlay::reloadRequested = true; // serviced on the render thread

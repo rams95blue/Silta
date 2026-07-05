@@ -139,10 +139,9 @@ asset_tag = true
 ; show a themed in-game popup with the verdict.
 [report]
 enabled = true
-; Comma-separated map-name fragments that count as "the end" (the report fires
-; when the current map name contains any). Edit to match your build's epilogue
-; map - check it in console with 'status' or the top-right HUD.
-ending_maps = infra_c10_m3_reactor,epilogue,outro,ending
+; Comma-separated map-name fragments that count as "the end"; the report fires
+; when the current map name contains any of them.
+ending_maps = infra_c11_ending_1,infra_c11_ending_2,infra_c11_ending_3
 ; How long the report popup stays on screen.
 popup_seconds = 12.0
 ; *** DEBUG ONLY *** Press this key to force the end-of-game report (file + popup)
@@ -389,11 +388,11 @@ bind6_cmd =
 ; ============================================================
 
 ; ===== Logging =====
-; *** DEBUG ONLY *** Verbose silta.log: timestamps every line, flushes
-; immediately (a crash leaves the last action in the log), and adds debug
-; breadcrumbs. Leave off in normal play; turn on when hunting a bug.
+; Verbose silta.log: timestamps every line, flushes immediately (a crash leaves
+; the last action in the log), and adds debug breadcrumbs. On by default during
+; the pre-release so tester logs are useful; set false for a quiet log.
 [log]
-verbose = false
+verbose = true
 
 ; ===== Version watermark =====
 ; Small white "SILTA v1.0" tag, shown ONLY in the main menu.

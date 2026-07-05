@@ -7,7 +7,7 @@ namespace overlay {
 	// SILTA - Finnish for "bridge": Siltanen's field kit, bridging INFRA to your
 	// survey tools. Bump kVersion per release.
 	constexpr const char* kModName = "SILTA";
-	constexpr const char* kVersion = "0.91";
+	constexpr const char* kVersion = "0.911";
 	extern bool  watermark;         // small corner tag with name+version (menu only)
 	extern int   watermarkCorner;   // 0 TL, 1 TR, 2 BL, 3 BR
 	extern bool  inMenu;            // true while no map is loaded (main menu)

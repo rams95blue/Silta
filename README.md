@@ -164,7 +164,7 @@ On first run the mod writes a fully-commented **`silta.ini`** next to `infra.exe
 (and the `silta.ini.example` in this repo) is the authoritative reference for every option.
 Delete `silta.ini` to regenerate documented defaults; press **F6** in-game to reload edits live.
 Window positions persist in `silta_layout.ini` (delete it once to re-seed the curated default
-layout). Before publishing, verify `[report] ending_maps` matches your build's real epilogue map (check the map name in console). Set `[log] verbose = true` when hunting a bug — timestamps + immediate flush + crash
+layout). Set `[log] verbose = true` when hunting a bug — timestamps + immediate flush + crash
 marker in `silta.log`.
 
 ## Version history
