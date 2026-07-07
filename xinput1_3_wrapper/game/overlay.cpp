@@ -121,6 +121,8 @@ bool   overlay::watermark = true;
 int    overlay::watermarkCorner = 3; // bottom-right
 std::string overlay::watermarkText = "";
 bool   overlay::forceBackbuffer = false;
+bool   overlay::useHotkeyPolling = false;
+bool   overlay::usePresentRender = false;
 bool   overlay::inMenu = true;
 bool   overlay::sketchEnabled = true;
 bool   overlay::sketchShown = false;
@@ -2281,6 +2283,103 @@ static void RenderSketch(LPDIRECT3DDEVICE9 dev) {
 }
 
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+// Run the action bound to a virtual-key. Shared by the window-message path
+// (WndProc) and the GetAsyncKeyState polling fallback, with a short same-key
+// dedup so a press seen by both paths only fires once.
+void overlay::DispatchHotkey(int vk) {
+	static int lastVk = 0;
+	static unsigned long long lastMs = 0;
+	const unsigned long long now = GetTickCount64();
+	if (vk == lastVk && (now - lastMs) < 120) return;
+	lastVk = vk; lastMs = now;
+
+	const overlay::Hotkeys& hk = overlay::hotkeys;
+	if (vk == Base::Data::Keys::ToggleMenu) {
+		overlay::shown = !overlay::shown;
+		LogV(overlay::shown ? "hotkey: overlays SHOWN (toggle-menu)"
+			: "hotkey: overlays HIDDEN (toggle-menu / Insert) - this hides ALL overlays");
+	}
+	else if (hk.reloadConfig && vk == hk.reloadConfig) {
+		overlay::reloadRequested = true;
+	}
+	else if (hk.toggleCounters && vk == hk.toggleCounters) {
+		overlay::countersEnabled = !overlay::countersEnabled;
+	}
+	else if (hk.toggleInventory && vk == hk.toggleInventory) {
+		overlay::inventoryEnabled = !overlay::inventoryEnabled;
+	}
+	else if (hk.cycleCountersCorner && vk == hk.cycleCountersCorner) {
+		overlay::countersCorner = NextCorner(overlay::countersCorner);
+		overlay::forceReposition = true;
+	}
+	else if (hk.cycleInventoryCorner && vk == hk.cycleInventoryCorner) {
+		overlay::inventoryCorner = NextCorner(overlay::inventoryCorner);
+		overlay::forceReposition = true;
+	}
+	else if (hk.toggleLock && vk == hk.toggleLock) {
+		overlay::locked = !overlay::locked;
+	}
+	else if (hk.resetPosition && vk == hk.resetPosition) {
+		overlay::forceReposition = true;
+	}
+	else if (hk.toggleNotes && vk == hk.toggleNotes) {
+		overlay::notesShown = !overlay::notesShown;
+		if (!overlay::notesShown) overlay::SaveNotes();
+	}
+	else if (hk.toggleSketch && vk == hk.toggleSketch) {
+		overlay::sketchShown = !overlay::sketchShown;
+	}
+	else if (hk.toggleCalculator && vk == hk.toggleCalculator) {
+		overlay::calcShown = !overlay::calcShown;
+	}
+	else if (hk.toggleEnding && vk == hk.toggleEnding) {
+		overlay::endingShown = !overlay::endingShown;
+	}
+	else if (hk.toggleContact && vk == hk.toggleContact) {
+		overlay::contactShown = !overlay::contactShown;
+		if (overlay::contactShown) g_CSScanned = false;
+	}
+	else if (overlay::debugReportKey && vk == overlay::debugReportKey) {
+		overlay::forceReportRequested = true;
+	}
+
+	overlay::RunTweakKey(vk);
+}
+
+// Fallback input path: poll the hotkeys with GetAsyncKeyState from the render
+// thread. Some systems / display modes never deliver WM_KEYDOWN to the overlay
+// (the verbose log shows zero "hotkey: keydown" lines) even though EndScene runs
+// fine - this makes the binds work there. Only polls when the game window is in
+// the foreground, so it can't fire while alt-tabbed out.
+void overlay::PollHotkeys() {
+	HWND gw = Base::Data::hWindow;
+	if (gw != nullptr && GetForegroundWindow() != gw) return;
+
+	static bool prev[256] = { false };
+	auto edge = [&](int vk) -> bool {
+		if (vk <= 0 || vk > 255) return false;
+		const bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+		const bool rose = down && !prev[vk];
+		prev[vk] = down;
+		return rose;
+	};
+	const overlay::Hotkeys& hk = overlay::hotkeys;
+	const int keys[] = {
+		static_cast<int>(Base::Data::Keys::ToggleMenu), hk.reloadConfig, hk.toggleCounters,
+		hk.toggleInventory, hk.cycleCountersCorner, hk.cycleInventoryCorner, hk.toggleLock,
+		hk.resetPosition, hk.toggleNotes, hk.toggleSketch, hk.toggleCalculator, hk.toggleEnding,
+		hk.toggleContact, overlay::debugReportKey
+	};
+	for (int vk : keys) {
+		if (edge(vk)) {
+			char pb[48];
+			sprintf_s(pb, sizeof(pb), "hotkey: poll fired vk=0x%02X", vk);
+			LogV(pb);
+			overlay::DispatchHotkey(vk);
+		}
+	}
+}
+
 void overlay::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	// Act only on the initial key-down, not on auto-repeat (lParam bit 30).
 	// F10 and Alt-combos arrive as WM_SYSKEYDOWN, so handle that too.
@@ -2301,65 +2400,13 @@ void overlay::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 			LogV(kb);
 		}
 
-		if (vk == Base::Data::Keys::ToggleMenu) {
-			overlay::shown = !overlay::shown;
-			LogV(overlay::shown ? "hotkey: overlays SHOWN (toggle-menu)"
-				: "hotkey: overlays HIDDEN (toggle-menu / Insert) - this hides ALL overlays");
-		}
-		else if (hk.reloadConfig && vk == hk.reloadConfig) {
-			overlay::reloadRequested = true; // serviced on the render thread
-		}
-		else if (hk.toggleCounters && vk == hk.toggleCounters) {
-			overlay::countersEnabled = !overlay::countersEnabled;
-		}
-		else if (hk.toggleInventory && vk == hk.toggleInventory) {
-			overlay::inventoryEnabled = !overlay::inventoryEnabled;
-		}
-		else if (hk.cycleCountersCorner && vk == hk.cycleCountersCorner) {
-			overlay::countersCorner = NextCorner(overlay::countersCorner);
-			overlay::forceReposition = true;
-		}
-		else if (hk.cycleInventoryCorner && vk == hk.cycleInventoryCorner) {
-			overlay::inventoryCorner = NextCorner(overlay::inventoryCorner);
-			overlay::forceReposition = true;
-		}
-		else if (hk.toggleLock && vk == hk.toggleLock) {
-			overlay::locked = !overlay::locked;
-			// Locking keeps windows where they are (acts as "save position").
-			// Use the reset hotkey to snap them back to their corners.
-		}
-		else if (hk.resetPosition && vk == hk.resetPosition) {
-			overlay::forceReposition = true;
-		}
-		else if (hk.toggleNotes && vk == hk.toggleNotes) {
-			overlay::notesShown = !overlay::notesShown;
-			if (!overlay::notesShown) {
-				overlay::SaveNotes();
-			}
-		}
-		else if (hk.toggleSketch && vk == hk.toggleSketch) {
-			overlay::sketchShown = !overlay::sketchShown;
-		}
-		else if (hk.toggleCalculator && vk == hk.toggleCalculator) {
-			overlay::calcShown = !overlay::calcShown;
-		}
-		else if (hk.toggleEnding && vk == hk.toggleEnding) {
-			overlay::endingShown = !overlay::endingShown;
-		}
-		else if (hk.toggleContact && vk == hk.toggleContact) {
-			overlay::contactShown = !overlay::contactShown;
-			if (overlay::contactShown) g_CSScanned = false; // rescan DCIM on open
-		}
-		else if (overlay::debugReportKey && vk == overlay::debugReportKey) {
-			overlay::forceReportRequested = true; // serviced on the render thread
-		}
-
-		// Debug [tweaks] key-binds run regardless of overlay focus (a keydown here
-		// still reaches the game), so postprocess/dev toggles work mid-play.
-		overlay::RunTweakKey(vk);
+		overlay::DispatchHotkey(vk);
 	}
 
-	ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam);
+	// Only feed ImGui once it exists (WndProc now runs before the first render).
+	if (overlay::imGuiInitialized) {
+		ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam);
+	}
 }
 // Draw the ImGui frame. Default: draw onto whatever render target is bound
 // (the historical behaviour). *** EXPERIMENTAL *** force_backbuffer: bind the

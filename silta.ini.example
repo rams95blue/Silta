@@ -36,11 +36,6 @@ tip_fade = false
 ; Seconds the tip bar stays before fading (when tip_fade = true).
 tip_fade_seconds = 8
 ; Remember dragged overlay/notes/sketch window positions across game restarts.
-; *** EXPERIMENTAL *** Render the overlay onto the real back buffer instead of
-; the currently-bound target. Fixes the overlay vanishing when Source
-; post-processing is off (mat_postprocess_enable 0). Leave false unless you hit
-; that.
-force_backbuffer_render = false
 save_layout = true
 ; ===== Focus fade (immersion) =====
 ; When on, the counters overlay rests nearly transparent and "wakes up" to full
@@ -348,6 +343,12 @@ toggle_contact = F5
 ; (complete_color for keys, text_color for descriptions).
 key_color =
 text_color =
+; *** EXPERIMENTAL *** Input fallback. If hotkeys do nothing on a machine (verbose
+; silta.log shows NO "hotkey: keydown" lines), the window isn't delivering key
+; messages to the overlay; set true to poll the keys each frame instead (only
+; while the game window is focused). Set [log] verbose = true to see
+; "hotkey: poll fired" lines confirming it works.
+use_polling = false
 
 ; ===== Engine tweaks (ADVANCED, off by default) =====
 ; Runs console commands on each map load via IVEngineClient.
@@ -408,3 +409,26 @@ corner = 3
 ; Main-menu watermark text. Empty = "SILTA v<version>" automatically; set any
 ; string to override it.
 text =
+
+; ===== Experimental (obsolete) =====
+; Attempts at fixing specific edge cases that did NOT pan out in testing. Kept
+; for reference only - leave them all false; none is a real fix.
+;
+; backbuffer_capture: capture photos from the back buffer instead of the game's
+;   freeze-frame texture. Saves after a save-load, but captures the composited
+;   screen (camera model/hand visible) - NOT the clean photo.
+; force_backbuffer_render: draw the overlay onto the real back buffer. Aimed to
+;   keep the overlay visible with post-processing off; did not fix it.
+; present_render: draw the overlay in Present() instead of EndScene(). Same goal
+;   as above; also did not fix the post-processing case.
+[experimental]
+backbuffer_capture = false
+force_backbuffer_render = false
+present_render = false
+; *** EXPERIMENTAL / READ-ONLY debug *** Log a value at engine.dll+offset on every
+; photo (verbose log only), for RE of the load-counter <-> failure correlation.
+; Never writes; out-of-range offset just logs. The offset is build-specific and
+; means nothing on another INFRA version - a probe, not a fix.
+engine_counter_probe = false
+; Hex offset into engine.dll for the probe, e.g. 0x120D91. Empty = off.
+engine_counter_offset =

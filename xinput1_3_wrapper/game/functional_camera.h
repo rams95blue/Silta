@@ -10,6 +10,9 @@ namespace mod {
 		extern int  outputWidth;   // saved photo width in px (0 = native)
 		extern int  outputHeight;  // saved photo height in px (0 = follow aspect)
 		extern bool aspectCrop;    // true = center-crop to target aspect, false = stretch
+		extern bool backbufferCapture; // EXPERIMENTAL: capture from back buffer, not freeze-frame
+		extern bool engineCounterProbe;    // EXPERIMENTAL: log engine.dll+offset each shot (read-only)
+		extern unsigned int engineCounterOffset; // offset into engine.dll (0 = disabled)
 		extern std::string exifMake;     // EXIF camera make
 		extern std::string exifModel;    // EXIF camera model
 		extern std::string exifSoftware; // EXIF software (empty = SILTA v<version>)

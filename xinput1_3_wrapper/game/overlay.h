@@ -7,11 +7,12 @@ namespace overlay {
 	// SILTA - Finnish for "bridge": Siltanen's field kit, bridging INFRA to your
 	// survey tools. Bump kVersion per release.
 	constexpr const char* kModName = "SILTA";
-	constexpr const char* kVersion = "0.912";
+	constexpr const char* kVersion = "0.919";
 	extern bool  watermark;         // small corner tag with name+version (menu only)
 	extern int   watermarkCorner;   // 0 TL, 1 TR, 2 BL, 3 BR
 	extern std::string watermarkText; // override text (empty = "SILTA v<ver>")
 	extern bool  forceBackbuffer;   // EXPERIMENTAL: force back buffer as RT before draw
+	extern bool  usePresentRender;  // EXPERIMENTAL: draw overlay in Present, not EndScene
 	extern bool  inMenu;            // true while no map is loaded (main menu)
 
 	enum class Corner { TopLeft, TopRight, BottomLeft, BottomRight };
@@ -193,6 +194,9 @@ namespace overlay {
 	extern int fontSize;
 
 	void WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+	void DispatchHotkey(int vk);    // run the action bound to a key (shared)
+	void PollHotkeys();             // GetAsyncKeyState fallback (render thread)
+	extern bool useHotkeyPolling;   // EXPERIMENTAL: poll keys instead of window msgs
 	void Render(HWND hWnd, LPDIRECT3DDEVICE9 pDevice);
 
 	// True if a typing window (notes/sketch) is open and ImGui wants to capture

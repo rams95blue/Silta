@@ -26,6 +26,9 @@ extern std::ofstream g_LogWriter;
 int  mod::functional_camera::outputWidth = 660;   // Crystal-shot 480p (lore default)
 int  mod::functional_camera::outputHeight = 480;
 bool mod::functional_camera::aspectCrop = true;
+bool mod::functional_camera::backbufferCapture = false;
+bool mod::functional_camera::engineCounterProbe = false;
+unsigned int mod::functional_camera::engineCounterOffset = 0;
 std::string mod::functional_camera::exifMake = "IMAGE-IN";
 std::string mod::functional_camera::exifModel = "Crystal-shot";
 std::string mod::functional_camera::exifSoftware = "";
@@ -431,9 +434,8 @@ namespace {
 }
 
 
-static void StretchAndSaveCameraImage(LPDIRECT3DDEVICE9 dev, IDirect3DTexture9* tex) {
+static void StretchAndSaveCameraImage(LPDIRECT3DDEVICE9 dev, IDirect3DSurface9* pSrcSurface, IDirect3DTexture9* texForFallback) {
 	IDirect3DSurface9* pDestSurface = nullptr;
-	IDirect3DSurface9* pSrcSurface = nullptr;
 	RECT rect;
 	float aspectRatio;
 	D3DSURFACE_DESC srcDesc;
@@ -459,12 +461,22 @@ static void StretchAndSaveCameraImage(LPDIRECT3DDEVICE9 dev, IDirect3DTexture9* 
 	aspectRatio = static_cast<float>(rect.bottom - rect.top) / static_cast<float>(rect.right - rect.left);
 
 	CHECK_D3D_RESULT(
-		tex->GetSurfaceLevel(0, &pSrcSurface), "StretchAndSaveCameraImage(): Failed to get src texture surface level 0"
-	)
-
-	CHECK_D3D_RESULT(
 		pSrcSurface->GetDesc(&srcDesc), "StretchAndSaveCameraImage(): Failed to GetDesc() of source surface"
 	)
+
+	// After a save-load the freeze-frame texture is often the game's 1x1 "not
+	// loaded" placeholder for a moment - the photo isn't ready yet. Saving it
+	// would produce a solid 660x480 blank (and may be tied to the hard freeze on
+	// snap). Reject anything degenerate; the shot is skipped, not corrupted.
+	// (pDestSurface isn't created yet and pSrcSurface is the caller's, so a plain
+	// return leaks nothing.)
+	if (srcDesc.Width < 16 || srcDesc.Height < 16) {
+		g_LogWriter << "StretchAndSaveCameraImage(): source is " << srcDesc.Width << "x" << srcDesc.Height
+			<< " - freeze-frame not ready (placeholder); photo skipped" << std::endl;
+		g_LogWriter.flush();
+		overlay::ShowToast("Photo not saved: camera not ready after load. Load the save again to fix this.", 4.0f);
+		return;
+	}
 
 	// Output resolution. Defaults to the Crystal-shot's in-lore 480p (660x480);
 	// photo_width/photo_height 0/0 = native capture, height 0 alone = follow the
@@ -649,7 +661,10 @@ static void StretchAndSaveCameraImage(LPDIRECT3DDEVICE9 dev, IDirect3DTexture9* 
 	if (!saved) {
 		g_LogWriter << "StretchAndSaveCameraImage(): scaled save failed; saving native "
 			<< srcDesc.Width << "x" << srcDesc.Height << std::endl;
-		if (D3DXSaveTextureToFile(path, fmt, tex, nullptr) == D3D_OK) {
+		const HRESULT fh = texForFallback != nullptr
+			? D3DXSaveTextureToFile(path, fmt, texForFallback, nullptr)
+			: D3DXSaveSurfaceToFile(path, fmt, pSrcSurface, nullptr, nullptr);
+		if (fh == D3D_OK) {
 			saved = true;
 		}
 	}
@@ -673,7 +688,35 @@ static void StretchAndSaveCameraImage(LPDIRECT3DDEVICE9 dev, IDirect3DTexture9* 
 
 release:
 	if (pDestSurface != nullptr) pDestSurface->Release();
-	if (pSrcSurface != nullptr) pSrcSurface->Release();
+	// pSrcSurface is owned by the caller.
+}
+
+// *** EXPERIMENTAL / READ-ONLY *** Log a DWORD at engine.dll+offset each shot,
+// for RE of the load-counter <-> freeze-frame correlation. Bounds-checked against
+// engine.dll's mapped image size so a wrong offset just logs instead of faulting.
+// Never writes. Verbose-only. Machine/build-specific - the offset from one build
+// is meaningless on another, which is why this is a probe, not a fix.
+static void LogEngineCounterProbe() {
+	if (!mod::functional_camera::engineCounterProbe || mod::functional_camera::engineCounterOffset == 0) {
+		return;
+	}
+	HMODULE base = GetModuleHandleA("engine.dll");
+	if (base == nullptr) { LogV("engine-probe: engine.dll not loaded"); return; }
+	const BYTE* b0 = reinterpret_cast<const BYTE*>(base);
+	const IMAGE_DOS_HEADER* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(b0);
+	const IMAGE_NT_HEADERS* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(b0 + dos->e_lfanew);
+	const DWORD imgSize = nt->OptionalHeader.SizeOfImage;
+	const unsigned int off = mod::functional_camera::engineCounterOffset;
+	if (off + sizeof(DWORD) > imgSize) {
+		char m[128];
+		sprintf_s(m, sizeof(m), "engine-probe: offset 0x%X out of engine.dll range (image size 0x%X)", off, imgSize);
+		LogV(m);
+		return;
+	}
+	const DWORD val = *reinterpret_cast<const DWORD*>(b0 + off);
+	char m[128];
+	sprintf_s(m, sizeof(m), "engine-probe: [engine.dll+0x%X] = %u (0x%X)", off, val, val);
+	LogV(m);
 }
 
 static void ExtractAndSaveCameraImageInner(LPDIRECT3DDEVICE9 pDevice, const CInfraCameraFreezeFrame* freezeFrame) {
@@ -682,7 +725,29 @@ static void ExtractAndSaveCameraImageInner(LPDIRECT3DDEVICE9 pDevice, const CInf
 	}
 
 	const char* map_name = Engine()->get_map_name();
-	const CMatSystemTexture* tex = Engine()->MaterialSystem_GetTextureById(freezeFrame->m_pImage->m_nTextureId);
+	const int texId = freezeFrame->m_pImage->m_nTextureId;
+	{
+		// Diagnostic: log the freeze-frame texture id each shot. If this climbs
+		// across save-loads and the failures track high ids, the id is running
+		// past the texture dictionary (out of range) rather than pointing at a
+		// live-but-recycled entry - which would mean a bounds check could replace
+		// the SEH skip for that case.
+		char b[64];
+		sprintf_s(b, sizeof(b), "camera: freeze-frame texture id = %d", texId);
+		LogV(b);
+	}
+	LogEngineCounterProbe();
+	// Cheap pre-guard: reject an obviously out-of-range id before it turns into a
+	// wild pointer inside MaterialSystem_GetTextureById. (An in-range but stale
+	// entry still faults and still needs the SEH guard - you can't tell a freed
+	// entry from a live one just by looking at the id.)
+	if (texId < 0 || texId > 1000000) {
+		g_LogWriter << "camera: freeze-frame texture id out of range (" << texId << ") - photo skipped" << std::endl;
+		g_LogWriter.flush();
+		return;
+	}
+
+	const CMatSystemTexture* tex = Engine()->MaterialSystem_GetTextureById(texId);
 
 	if (tex == nullptr) {
 		g_LogWriter << "tex was null in " << map_name << std::endl;
@@ -715,7 +780,57 @@ static void ExtractAndSaveCameraImageInner(LPDIRECT3DDEVICE9 pDevice, const CInf
 		return;
 	}
 
-	StretchAndSaveCameraImage(pDevice, texHandles[0]->m_pTexture0);
+	IDirect3DTexture9* srcTex = texHandles[0]->m_pTexture0;
+	IDirect3DSurface9* srcSurf = nullptr;
+	if (srcTex == nullptr || srcTex->GetSurfaceLevel(0, &srcSurf) != D3D_OK || srcSurf == nullptr) {
+		g_LogWriter << "camera: failed to get freeze-frame surface" << std::endl;
+		return;
+	}
+	StretchAndSaveCameraImage(pDevice, srcSurf, srcTex);
+	srcSurf->Release();
+}
+
+// *** EXPERIMENTAL *** Capture the photo from the back buffer instead of walking
+// the game's freeze-frame texture chain. The chain dereferences game-owned
+// material/texture pointers that dangle after a save-load (rebuilt texture
+// dictionary), which the SEH guard has to skip. Reading the presented frame
+// avoids those pointers entirely - at the cost of capturing whatever is on
+// screen at the capture instant (the frozen photo, ideally). Uses
+// GetRenderTargetData to pull the back buffer into a system-memory surface,
+// then the shared encode path.
+static void CaptureBackBufferAndSave(LPDIRECT3DDEVICE9 dev) {
+	IDirect3DSurface9* bb = nullptr;
+	IDirect3DSurface9* resolved = nullptr; // non-MSAA RT for the resolve
+	IDirect3DSurface9* sysSurf = nullptr;
+	if (dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb) != D3D_OK || bb == nullptr) {
+		g_LogWriter << "camera: GetBackBuffer failed (backbuffer capture)" << std::endl;
+		g_LogWriter.flush();
+		return;
+	}
+	D3DSURFACE_DESC d;
+	if (bb->GetDesc(&d) == D3D_OK) {
+		// Back buffers are usually multisampled, and GetRenderTargetData refuses
+		// MSAA surfaces. Resolve first: StretchRect the back buffer into a plain
+		// (non-MSAA) render target, then pull THAT into system memory.
+		IDirect3DSurface9* copySrc = bb;
+		if (dev->CreateRenderTarget(d.Width, d.Height, d.Format, D3DMULTISAMPLE_NONE, 0, FALSE, &resolved, nullptr) == D3D_OK
+			&& resolved != nullptr
+			&& dev->StretchRect(bb, nullptr, resolved, nullptr, D3DTEXF_NONE) == D3D_OK) {
+			copySrc = resolved; // resolved (non-MSAA) copy
+		}
+		if (dev->CreateOffscreenPlainSurface(d.Width, d.Height, d.Format, D3DPOOL_SYSTEMMEM, &sysSurf, nullptr) == D3D_OK) {
+			if (dev->GetRenderTargetData(copySrc, sysSurf) == D3D_OK) {
+				StretchAndSaveCameraImage(dev, sysSurf, nullptr);
+			} else {
+				g_LogWriter << "camera: GetRenderTargetData failed even after resolve - "
+					"backbuffer capture unavailable here" << std::endl;
+				g_LogWriter.flush();
+			}
+		}
+	}
+	if (sysSurf != nullptr) sysSurf->Release();
+	if (resolved != nullptr) resolved->Release();
+	if (bb != nullptr) bb->Release();
 }
 
 // SEH-guarded wrapper. The freeze-frame -> material -> texture walk above reads
@@ -723,7 +838,7 @@ static void ExtractAndSaveCameraImageInner(LPDIRECT3DDEVICE9 pDevice, const CInf
 // rebuilds its texture cache), so an access violation there would crash the
 // game. Catch it, log it, skip the photo. No C++ unwinding objects live in this
 // frame (only 'crashed'), which is what makes __try/__except legal here.
-static void ExtractAndSaveCameraImage(LPDIRECT3DDEVICE9 pDevice, const CInfraCameraFreezeFrame* freezeFrame) {
+static bool ExtractAndSaveCameraImage(LPDIRECT3DDEVICE9 pDevice, const CInfraCameraFreezeFrame* freezeFrame) {
 	bool crashed = false;
 	__try {
 		ExtractAndSaveCameraImageInner(pDevice, freezeFrame);
@@ -731,11 +846,15 @@ static void ExtractAndSaveCameraImage(LPDIRECT3DDEVICE9 pDevice, const CInfraCam
 		crashed = true;
 	}
 	if (crashed) {
+		// No std::string temporaries here: this frame uses __try, so it must not
+		// contain anything requiring object unwinding. The caller shows the toast.
 		g_LogWriter << "camera: access violation caught during photo save - photo "
-			"skipped (stale freeze-frame/texture pointer, typically after loading a save)"
+			"skipped (stale freeze-frame/texture pointer, typically after loading a save or "
+			"alt-tabbing - the game rebuilds its textures and recreates them lazily)"
 			<< std::endl;
 		g_LogWriter.flush();
 	}
+	return crashed;
 }
 
 // Per-frame calibration hunt (throttled to 2 Hz). While [camera] calibrate holds
@@ -785,7 +904,15 @@ void mod::functional_camera::OnTakePicture(CInfraCameraFreezeFrame *freezeFrame)
 
 void mod::functional_camera::EndScene(LPDIRECT3DDEVICE9 pDevice) {
 	if (InterlockedCompareExchange(&g_ShouldSaveImage, 0, 1)) {
-		ExtractAndSaveCameraImage(pDevice, g_FreezeFrame);
+		if (mod::functional_camera::backbufferCapture) {
+			CaptureBackBufferAndSave(pDevice);
+		} else {
+			// Toast here (not in the SEH wrapper - that frame can't hold a
+			// std::string temporary) so the player knows the shot was skipped.
+			if (ExtractAndSaveCameraImage(pDevice, g_FreezeFrame)) {
+				overlay::ShowToast("Photo not saved: camera not ready after load. Load the save again to fix this.", 4.0f);
+			}
+		}
 	}
 }
 

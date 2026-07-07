@@ -92,6 +92,7 @@ int __fastcall CInfraCameraFreezeFrame__OnCommand(CInfraCameraFreezeFrame* thiz,
 // DirectX EndScene()
 HRESULT __stdcall EndScene(LPDIRECT3DDEVICE9 pDevice);
 HRESULT (__stdcall *EndScene_orig)(LPDIRECT3DDEVICE9 pDevice);
+void MaybeRenderOverlay(LPDIRECT3DDEVICE9 pDevice);
 
 // DirectX Reset() - hooked so the overlay releases its D3DPOOL_DEFAULT objects
 // before the game resets a lost device (exclusive-fullscreen alt-tab). Without
@@ -99,6 +100,14 @@ HRESULT (__stdcall *EndScene_orig)(LPDIRECT3DDEVICE9 pDevice);
 // restore the device - the classic "can't alt-tab back in fullscreen" hang.
 HRESULT __stdcall DeviceReset(LPDIRECT3DDEVICE9 pDevice, D3DPRESENT_PARAMETERS* pPresentationParameters);
 HRESULT (__stdcall *DeviceReset_orig)(LPDIRECT3DDEVICE9 pDevice, D3DPRESENT_PARAMETERS* pPresentationParameters);
+
+// DirectX Present() - hooked only to support the EXPERIMENTAL present-render
+// mode, which draws the overlay here (the very last step before the frame is
+// shown) instead of in EndScene. Some render paths (e.g. Source with
+// post-processing off) overwrite or discard whatever EndScene drew; Present is
+// after all of that.
+HRESULT __stdcall DevicePresent(LPDIRECT3DDEVICE9 pDevice, const RECT* src, const RECT* dst, HWND wnd, const RGNDATA* dirty);
+HRESULT (__stdcall *DevicePresent_orig)(LPDIRECT3DDEVICE9 pDevice, const RECT* src, const RECT* dst, HWND wnd, const RGNDATA* dirty);
 /* Hooked functions end */
 
 // Handles to functions in the engine
@@ -584,12 +593,29 @@ static void load_config() {
 			"; How long the overlay stays fully visible after an event.");
 		config.SetDoubleValue("overlay", "focus_ramp", 0.35,
 			"; Fade in/out time (seconds) between resting and visible.");
-		config.SetBoolValue("overlay", "force_backbuffer_render", false,
-			"; *** EXPERIMENTAL *** Render the overlay onto the real back buffer\n"
-			"; instead of the currently-bound target. Fixes the overlay vanishing\n"
-			"; when Source post-processing is off (mat_postprocess_enable 0). Leave\n"
-			"; false unless you hit that; enable if the overlay disappears with\n"
-			"; certain graphics settings.");
+		// ----- Experimental (obsolete) toggles, grouped into [experimental] -----
+		config.SetBoolValue("experimental", "backbuffer_capture", false,
+			"; ===== Experimental (obsolete) =====\n"
+			"; Attempts at fixing specific edge cases that did NOT pan out in testing.\n"
+			"; Kept for reference only - leave them all false; none is a real fix.\n"
+			";\n"
+			"; backbuffer_capture: capture photos from the back buffer instead of the\n"
+			"; game's freeze-frame texture. Saves after a save-load, but captures the\n"
+			"; composited screen (camera model/hand visible) - NOT the clean photo.");
+		config.SetBoolValue("experimental", "force_backbuffer_render", false,
+			"; force_backbuffer_render: draw the overlay onto the real back buffer.\n"
+			"; Aimed to keep the overlay visible with post-processing off; did not fix it.");
+		config.SetBoolValue("experimental", "present_render", false,
+			"; present_render: draw the overlay in Present() instead of EndScene().\n"
+			"; Same goal as above; also did not fix the post-processing case.");
+		config.SetBoolValue("experimental", "engine_counter_probe", false,
+			"; *** EXPERIMENTAL / READ-ONLY debug *** Log a value at engine.dll+offset\n"
+			"; on every photo (verbose log only), for reverse-engineering the load\n"
+			"; counter <-> photo failure correlation. Reads nothing if the offset is\n"
+			"; out of range; never writes. The offset is build-specific and means\n"
+			"; nothing on another INFRA version - this is a probe, not a fix.");
+		config.SetValue("experimental", "engine_counter_offset", "",
+			"; Hex offset into engine.dll for the probe above, e.g. 0x120D91. Empty = off.");
 		config.SetBoolValue("overlay", "save_layout", true,
 			"; Remember dragged overlay/notes/sketch window positions across game restarts.");
 		config.SetValue("overlay", "palette", "default",
@@ -863,6 +889,12 @@ static void load_config() {
 			"; Hotkey tip bar styling (hex RRGGBB). Empty = follow the overlay theme\n"
 			"; colors (complete_color for keys, text_color for descriptions).");
 		config.SetValue("hotkeys", "text_color", "");
+		config.SetBoolValue("hotkeys", "use_polling", false,
+			"; *** EXPERIMENTAL *** Input fallback. If hotkeys do nothing on a machine\n"
+			"; (verbose silta.log shows NO 'hotkey: keydown' lines), the window isn't\n"
+			"; delivering key messages to the overlay. Set true to poll the keys each\n"
+			"; frame instead (only while the game window is focused). Set [log] verbose\n"
+			"; = true to see 'hotkey: poll fired' lines confirming it works.");
 
 		config.SetBoolValue("tweaks", "enabled", false,
 			"; ===== Engine tweaks (ADVANCED, off by default) =====\n; Runs console commands on each map load via IVEngineClient.\n; engine_interface: leave blank to auto-try common versions, or set one.\n; clientcmd_index: IVEngineClient::ClientCmd vtable slot - VERIFY before enabling,\n; a wrong index can crash. Any other key here is treated as a command to run,\n; e.g.  captions = closecaption 1");
@@ -920,6 +952,7 @@ static void load_config() {
 	overlay::fontColorMax = ParseHexColor(config.GetValue("overlay", "complete_color", "00FF00"), ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
 	overlay::tipKeyColor = ParseHexColor(config.GetValue("hotkeys", "key_color", ""), overlay::fontColorMax);
 	overlay::tipTextColor = ParseHexColor(config.GetValue("hotkeys", "text_color", ""), overlay::fontColor);
+	overlay::useHotkeyPolling = config.GetBoolValue("hotkeys", "use_polling", false);
 	overlay::titleColor = ParseHexColor(config.GetValue("overlay", "title_color", "666666"), ImVec4(0.40f, 0.40f, 0.40f, 1.0f));
 	overlay::backgroundAlpha = static_cast<float>(config.GetDoubleValue("overlay", "background_alpha", 0.30));
 	overlay::margin = config.GetLongValue("overlay", "margin", 10);
@@ -937,6 +970,7 @@ static void load_config() {
 	mod::functional_camera::outputHeight = static_cast<int>(config.GetLongValue("camera", "photo_height",
 		config.KeyExists("camera", "photo_width") || !config.KeyExists("camera", "output_width") ? 480 : 0));
 	mod::functional_camera::aspectCrop = (ToLower(config.GetValue("camera", "aspect", "crop")) != "stretch");
+	mod::functional_camera::backbufferCapture = config.GetBoolValue("experimental", "backbuffer_capture", false);
 	mod::functional_camera::exifMake = config.GetValue("camera", "exif_make", "IMAGE-IN");
 	mod::functional_camera::exifModel = config.GetValue("camera", "exif_model", "Crystal-shot");
 	mod::functional_camera::exifSoftware = config.GetValue("camera", "exif_software", "");
@@ -1141,7 +1175,11 @@ static void load_config() {
 	overlay::tipFade = config.GetBoolValue("overlay", "tip_fade", false);
 	overlay::tipFadeSeconds = static_cast<float>(config.GetDoubleValue("overlay", "tip_fade_seconds", 8.0));
 	overlay::saveLayout = config.GetBoolValue("overlay", "save_layout", true);
-	overlay::forceBackbuffer = config.GetBoolValue("overlay", "force_backbuffer_render", false);
+	overlay::forceBackbuffer = config.GetBoolValue("experimental", "force_backbuffer_render", false);
+	overlay::usePresentRender = config.GetBoolValue("experimental", "present_render", false);
+	mod::functional_camera::engineCounterProbe = config.GetBoolValue("experimental", "engine_counter_probe", false);
+	mod::functional_camera::engineCounterOffset = static_cast<unsigned int>(
+		strtoul(config.GetValue("experimental", "engine_counter_offset", ""), nullptr, 0));
 	overlay::watermarkText = config.GetValue("watermark", "text", "");
 	overlay::countersFocusFade = config.GetBoolValue("overlay", "focus_fade_counters", false);
 	overlay::invFocusFade = config.GetBoolValue("overlay", "focus_fade_inventory", false);
@@ -1521,6 +1559,12 @@ HRESULT __stdcall EndScene(const LPDIRECT3DDEVICE9 pDevice) {
 	// (fixes empty inventory + dead gauge after chapter loads).
 	mod::inventory::RetryTick();
 
+	// Experimental input fallback: poll hotkeys when window messages don't reach
+	// the overlay on some systems.
+	if (overlay::useHotkeyPolling) {
+		overlay::PollHotkeys();
+	}
+
 	// *** DEBUG ONLY *** force the end-of-game report via the [report]
 	// debug_trigger key. Serviced here (per frame) so it fires immediately, not
 	// on the next map load.
@@ -1534,6 +1578,17 @@ HRESULT __stdcall EndScene(const LPDIRECT3DDEVICE9 pDevice) {
 	// Origin calibration hunt (no-op unless [camera] calibrate is set and unfound).
 	mod::functional_camera::CalibrationTick();
 
+	// Default: draw the overlay here in EndScene. In present-render mode, skip it
+	// here and draw it in the Present hook instead (see MaybeRenderOverlay).
+	if (!overlay::usePresentRender) {
+		MaybeRenderOverlay(pDevice);
+	}
+
+	return EndScene_orig(pDevice);
+}
+
+// The overlay render decision, shared by the EndScene and Present hooks.
+void MaybeRenderOverlay(LPDIRECT3DDEVICE9 pDevice) {
 	const bool anyOverlay = g_SuccessCountersEnabled || g_InventoryOverlayEnabled || overlay::notesEnabled || overlay::sketchEnabled || overlay::calcEnabled || overlay::endingEnabled || overlay::contactEnabled;
 
 	// The version watermark shows ONLY in the main menu, where the gameplay
@@ -1545,14 +1600,29 @@ HRESULT __stdcall EndScene(const LPDIRECT3DDEVICE9 pDevice) {
 		|| (overlay::watermark && overlay::inMenu)) {
 		overlay::Render(Base::Data::hWindow, pDevice);
 	}
+}
 
-	return EndScene_orig(pDevice);
+HRESULT __stdcall DevicePresent(LPDIRECT3DDEVICE9 pDevice, const RECT* src, const RECT* dst, HWND wnd, const RGNDATA* dirty) {
+	// EXPERIMENTAL present-render: draw the overlay in its own scene here, at the
+	// last possible moment. Do NOT gate on imGuiInitialized - overlay::Render
+	// performs the lazy init itself, and gating here would deadlock (EndScene
+	// skips the render in this mode, so init would never happen). Render even if
+	// BeginScene fails (a scene may already be active); only close a scene we
+	// actually opened, via EndScene_orig so the per-frame ticks don't re-run.
+	if (overlay::usePresentRender && pDevice != nullptr) {
+		const bool began = (pDevice->BeginScene() == D3D_OK);
+		MaybeRenderOverlay(pDevice);
+		if (began) EndScene_orig(pDevice);
+	}
+	return DevicePresent_orig(pDevice, src, dst, wnd, dirty);
 }
 
 LRESULT CALLBACK WndProc(const HWND hWnd, const UINT uMsg, const WPARAM wParam, const LPARAM lParam) {
-	if (g_SuccessCountersEnabled || g_InventoryOverlayEnabled || overlay::notesEnabled || overlay::sketchEnabled || overlay::calcEnabled || overlay::endingEnabled || overlay::contactEnabled) {
-		overlay::WndProc(hWnd, uMsg, wParam, lParam);
-	}
+	// Always dispatch to the overlay so hotkeys work regardless of which features
+	// are enabled. Previously this was gated on a feature being on, so a user with
+	// everything toggled off couldn't use ANY hotkey - including the show/hide and
+	// reload keys - which read as "can't change hotkeys".
+	overlay::WndProc(hWnd, uMsg, wParam, lParam);
 
 	// When the notes box is open and focused, keep keyboard/mouse out of the game.
 	if (overlay::WantsToCapture(uMsg)) {
@@ -1600,6 +1670,11 @@ HRESULT __stdcall DeviceReset(LPDIRECT3DDEVICE9 pDevice, D3DPRESENT_PARAMETERS* 
 			LogE("d3d: device Reset FAILED");
 		}
 	}
+	// A device reset (alt-tab in fullscreen) loses D3DPOOL_DEFAULT resources - the
+	// game's freeze-frame texture included - and recreates them lazily. Drop any
+	// latched photo so it can't fire against the not-yet-recreated freeze-frame,
+	// same as we do on a map/save load.
+	mod::functional_camera::ResetPendingCapture();
 	return hr;
 }
 
@@ -1612,11 +1687,14 @@ bool Base::Hooks::Init() {
 	if (GetD3D9Device((void**)Data::pDeviceTable, D3DDEV9_LEN)) {
 		void* pEndScene = Data::pDeviceTable[42];
 		void* pReset = Data::pDeviceTable[16];
+		void* pPresent = Data::pDeviceTable[17];
 
 		MH_CreateHook(pEndScene, &EndScene, reinterpret_cast<LPVOID*>(&EndScene_orig));
 		MH_EnableHook(pEndScene);
 		MH_CreateHook(pReset, &DeviceReset, reinterpret_cast<LPVOID*>(&DeviceReset_orig));
 		MH_EnableHook(pReset);
+		MH_CreateHook(pPresent, &DevicePresent, reinterpret_cast<LPVOID*>(&DevicePresent_orig));
+		MH_EnableHook(pPresent);
 
 		Data::oWndProc  = (WndProc_t)SetWindowLongPtr(Data::hWindow, WNDPROC_INDEX, (LONG_PTR)WndProc);
 		hook_game_functions();	
@@ -1630,6 +1708,8 @@ bool Base::Hooks::Init() {
 bool Base::Hooks::Shutdown() {
 	void* pEndScene = Data::pDeviceTable[42];
 	void* pReset = Data::pDeviceTable[16];
+	void* pPresent = Data::pDeviceTable[17];
+	MH_DisableHook(pPresent);
 	MH_DisableHook(pReset);
 
 	if (overlay::imGuiInitialized) {
