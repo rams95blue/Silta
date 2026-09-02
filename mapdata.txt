@@ -374,5 +374,13 @@
         "mistake_targets": 0,
         "geocaches": 0,
         "water_flow_meter_targets": 0
+    },
+    "cutmap_bank": {
+        "camera_targets": 19,
+        "corruption_targets": 6,
+        "repair_targets": 2,
+        "mistake_targets": 0,
+        "geocaches": 0,
+        "water_flow_meter_targets": 0
     }
 }
