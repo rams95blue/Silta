@@ -372,6 +372,46 @@ auto g_mapdata = R"(
         "mistake_targets": 0,
         "geocaches": 0,
         "water_flow_meter_targets": 0
+    },
+        "ug_c1_m1_house": {
+        "camera_targets": 8,
+        "corruption_targets": 5,
+        "repair_targets": 0,
+        "mistake_targets": 0,
+        "geocaches": 1,
+        "water_flow_meter_targets": 0
+    },
+    "ug_c1_m2_underground": {
+        "camera_targets": 35,
+        "corruption_targets": 3,
+        "repair_targets": 0,
+        "mistake_targets": 0,
+        "geocaches": 0,
+        "water_flow_meter_targets": 0
+    },
+    "ug_c1_m3_tunnels": {
+        "camera_targets": 31,
+        "corruption_targets": 6,
+        "repair_targets": 0,
+        "mistake_targets": 0,
+        "geocaches": 1,
+        "water_flow_meter_targets": 0
+    },
+    "ug_c1_m4_cave": {
+        "camera_targets": 6,
+        "corruption_targets": 0,
+        "repair_targets": 0,
+        "mistake_targets": 0,
+        "geocaches": 0,
+        "water_flow_meter_targets": 0
+    },
+    "cutmap_bank": {
+        "camera_targets": 19,
+        "corruption_targets": 6,
+        "repair_targets": 2,
+        "mistake_targets": 0,
+        "geocaches": 0,
+        "water_flow_meter_targets": 0
     }
 }
 )"_json;
